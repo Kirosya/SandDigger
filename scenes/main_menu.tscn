@@ -100,6 +100,22 @@ theme_override_font_sizes/font_size = 22
 text = "Join Game"
 alignment = 0
 
+[node name="SteamRow" type="HBoxContainer" parent="Menu"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="SteamHost" type="Button" parent="Menu/SteamRow"]
+custom_minimum_size = Vector2(134, 52)
+layout_mode = 2
+theme_override_font_sizes/font_size = 18
+text = "Steam Host"
+
+[node name="SteamJoin" type="Button" parent="Menu/SteamRow"]
+custom_minimum_size = Vector2(134, 52)
+layout_mode = 2
+theme_override_font_sizes/font_size = 18
+text = "Steam Join"
+
 [node name="Settings" type="Button" parent="Menu"]
 custom_minimum_size = Vector2(280, 52)
 layout_mode = 2
@@ -129,7 +145,7 @@ grow_horizontal = 0
 grow_vertical = 0
 theme_override_colors/font_color = Color(0.25, 0.2, 0.13, 0.8)
 theme_override_font_sizes/font_size = 16
-text = "Phase 2  ·  single player"
+text = "Phase 3  ·  ENet + Steam (Spacewar 480)"
 horizontal_alignment = 2
 
 [node name="Modal" type="Control" parent="."]

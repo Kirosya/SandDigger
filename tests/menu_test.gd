@@ -16,6 +16,12 @@ func _ready() -> void:
 	_check("host button", menu.get_node_or_null("Menu/Host") != null)
 	_check("join button", menu.get_node_or_null("Menu/Join") != null)
 	_check("settings button", menu.get_node_or_null("Menu/Settings") != null)
+	_check("steam host button", menu.get_node_or_null("Menu/SteamRow/SteamHost") != null)
+	_check("steam join button", menu.get_node_or_null("Menu/SteamRow/SteamJoin") != null)
+	_check("steam host wired",
+		not menu.get_node("Menu/SteamRow/SteamHost").pressed.get_connections().is_empty())
+	_check("steam join wired",
+		not menu.get_node("Menu/SteamRow/SteamJoin").pressed.get_connections().is_empty())
 	_check("quit button", menu.get_node_or_null("Menu/Quit") != null)
 	_check("modal hidden at start", not menu.get_node("Modal").visible)
 	_check("settings hidden at start", not menu.get_node("Settings").visible)
@@ -37,6 +43,18 @@ func _ready() -> void:
 		dialog.hide()
 	await get_tree().process_frame
 	_check("join dialog closes", dialog == null or not dialog.visible)
+
+	# Steam gate: when Steam cannot start, "Steam Host" must explain the reason
+	# instead of starting a bogus session or crashing. When Steam is signed in
+	# the test does not press it, so no real lobby is created.
+	if not Net.steam_init():
+		menu.get_node("Menu/SteamRow/SteamHost").pressed.emit()
+		await get_tree().process_frame
+		_check("steam gate shows a modal", menu.get_node("Modal").visible)
+		_check("steam gate starts no session", not Net.is_online())
+		menu.get_node("Modal/Panel/Margin/VBox/Close").pressed.emit()
+		await get_tree().process_frame
+		_check("steam modal closes", not menu.get_node("Modal").visible)
 
 	menu.get_node("Menu/Settings").pressed.emit()
 	await get_tree().process_frame
