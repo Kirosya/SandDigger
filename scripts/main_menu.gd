@@ -281,6 +281,10 @@ func _clear_children(node: Node) -> void:
 func _on_quit() -> void:
 	Net.leave()
 	Net.steam_shutdown()
+	Sfx.stop_ambience()
+	# Let the last UI click actually finish: quitting in the same frame it starts
+	# leaves an audio playback alive while Godot tears the tree down.
+	await get_tree().create_timer(0.15).timeout
 	get_tree().quit()
 
 

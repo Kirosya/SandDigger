@@ -185,6 +185,7 @@ func _interact() -> void:
 func _on_loot_claimed(item: Dictionary) -> void:
 	if _state == null or int(item.get("owner", 0)) != _state.player_id:
 		return
+	Sfx.play_ui("pickup", 0.05, -4.0)
 	_flash_hud("Picked up %s  ($%d)  -  bag %d/%d" % [
 		str(item.get("name", "loot")), int(item.get("value", 0)),
 		_state.carried_count(), PlayerState.INVENTORY_SLOTS])
@@ -203,8 +204,10 @@ func _select_slot(index: int) -> void:
 func _sell_held() -> void:
 	var item := _state.sell_held()
 	if item.is_empty():
+		Sfx.play_ui("denied", 0.04, -8.0)
 		_flash_hud("Hold an item first - press 1-7")
 		return
+	Sfx.play_ui("coin", 0.06, -3.0)
 	_flash_hud("Sold %s for $%d" % [str(item.get("name", "item")), int(item.get("value", 0))])
 
 

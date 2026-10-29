@@ -87,28 +87,35 @@ func _on_row_pressed(index: int) -> void:
 
 func _buy_detector() -> void:
 	if _state.has_detector:
+		Sfx.play_ui("denied", 0.04, -8.0)
 		_message.text = "You already own the metal detector."
 		return
 	if _state.buy_detector():
+		Sfx.play_ui("upgrade", 0.0, -3.0)
 		_message.text = "Bought the Metal Detector!  [Q] swaps it into your hand."
 		if _player != null and _player.has_method("set_tool_mode"):
 			_player.set_tool_mode(1)
 	else:
+		Sfx.play_ui("denied", 0.04, -8.0)
 		_message.text = "The detector costs $%d - keep digging!" % int(PlayerState.DETECTOR_PRICE)
 
 
 func _buy_tier(index: int) -> void:
 	var tier := _state.tiers[index]
 	if index <= _state.equipment_tier_index:
+		Sfx.play_ui("denied", 0.04, -8.0)
 		_message.text = "You already own the %s." % tier.display_name
 		return
 	var next_index := _state.equipment_tier_index + 1
 	if index != next_index:
+		Sfx.play_ui("denied", 0.04, -8.0)
 		_message.text = "Upgrade in order - next is the %s." % _state.tiers[next_index].display_name
 		return
 	if _state.buy_tier(index):
+		Sfx.play_ui("upgrade", 0.0, -3.0)
 		_message.text = "Bought the %s!  radius %.2f m" % [tier.display_name, tier.radius]
 		return
+	Sfx.play_ui("denied", 0.04, -8.0)
 	var missing: Array[String] = []
 	if _state.current_level < tier.level_required:
 		missing.append("Lv %d" % tier.level_required)

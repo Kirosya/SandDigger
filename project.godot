@@ -19,6 +19,9 @@ config/icon="res://icon.svg"
 
 MCPRuntimeProbe="*uid://ccjof6txapfes"
 GameSettings="*res://scripts/game_settings.gd"
+Sfx="*res://scripts/sfx.gd"
+Fx="*res://scripts/fx.gd"
+Profile="*res://scripts/profile_store.gd"
 Net="*res://scripts/network_manager.gd"
 
 [display]

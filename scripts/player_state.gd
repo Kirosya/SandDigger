@@ -15,6 +15,8 @@ signal carried_changed(carried_count: int, carried_value: float)
 ## Emitted whenever the bag or the held slot changes, so the HUD can redraw.
 signal inventory_changed(slots: Array[Dictionary], held_slot: int)
 signal detector_changed(has_detector: bool)
+## Emitted when digging pushes this player past a level threshold.
+signal leveled_up(new_level: int)
 
 ## XP awarded per cubic metre of removed sand. Tunable balance knob.
 const XP_PER_CUBIC_METER := 150.0
@@ -95,10 +97,13 @@ func xp_to_next_level() -> float:
 
 
 func _refresh_level() -> void:
+	var previous := current_level
 	var new_level := 1
 	while current_xp >= xp_required_for_level(new_level + 1):
 		new_level += 1
 	current_level = new_level
+	if current_level > previous:
+		leveled_up.emit(current_level)
 
 
 func add_money(amount: float) -> void:
@@ -141,6 +146,12 @@ func _ensure_bag() -> void:
 		bag_slots.append({})
 	if bag_slots.size() > INVENTORY_SLOTS:
 		bag_slots.resize(INVENTORY_SLOTS)
+
+
+## Public form of _ensure_bag, for code that fills the bag from outside (the
+## profile loader restores saved items into slot order).
+func ensure_bag() -> void:
+	_ensure_bag()
 
 
 ## How many slots are actually filled.

@@ -82,6 +82,9 @@ func _ready() -> void:
 
 	if _failures == 0:
 		print("MENU OK")
+		# Let the last UI click finish; quitting in its first millisecond leaves
+		# a playback alive while the tree is torn down.
+		await get_tree().create_timer(0.2).timeout
 		get_tree().quit(0)
 	else:
 		print("MENU FAILED (%d)" % _failures)

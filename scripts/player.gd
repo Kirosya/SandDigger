@@ -35,6 +35,10 @@ const TOOL_DETECTOR := 1
 ## Emitted when Q swaps the hand between the shovel and the detector.
 signal tool_mode_changed(mode: int)
 
+## Seconds between footstep sounds: quicker when sprinting.
+const STEP_INTERVAL_WALK := 0.52
+const STEP_INTERVAL_SPRINT := 0.38
+
 ## The player id this body belongs to (the host is 1, clients get their peer id).
 var player_id: int = 1
 
@@ -64,6 +68,7 @@ var _third_person := false
 var _held_item: Dictionary = {}
 var _item_visual: MeshInstance3D
 var _item_visual_id := -1
+var _step_timer := 0.0
 
 
 func _ready() -> void:
@@ -91,8 +96,16 @@ func _ready() -> void:
 	if state != null:
 		state.equipment_changed.connect(apply_equipment)
 		state.inventory_changed.connect(_on_inventory_changed)
+		state.leveled_up.connect(_on_leveled_up)
 		apply_equipment(state.get_current_equipment())
 	_update_hand_visuals()
+
+
+func _on_leveled_up(level: int) -> void:
+	Sfx.play_ui("levelup", 0.0, -2.0)
+	var hud := get_tree().get_first_node_in_group("hud") as Hud
+	if hud != null:
+		hud.flash("Level %d!  Better shovels are closer now" % level)
 
 
 ## True on the machine that owns this body (always true in single player).
@@ -273,6 +286,16 @@ func _physics_process(delta: float) -> void:
 		velocity.z = move_toward(velocity.z, 0.0, speed * 8.0 * delta)
 
 	move_and_slide()
+
+	# Footsteps: only for the body this machine owns, and only while grounded.
+	var sprinting := Input.is_action_pressed("sprint")
+	if is_on_floor() and direction.length_squared() > 0.01:
+		_step_timer -= delta
+		if _step_timer <= 0.0:
+			_step_timer = STEP_INTERVAL_SPRINT if sprinting else STEP_INTERVAL_WALK
+			Sfx.play_world("step_sand", global_position + Vector3(0.0, -0.1, 0.0), 0.16, -12.0)
+	else:
+		_step_timer = minf(_step_timer, 0.12)
 
 	# Safety net: fell off the beach or waded out past the sea floor.
 	if global_position.y < -3.5:

@@ -130,6 +130,9 @@ func _ready() -> void:
 func _finish() -> void:
 	if _failures == 0:
 		print("INVENTORY OK")
+		# Let the level-up fanfare (0.71 s) finish: quitting in the same frame as
+		# a playing stream makes Godot report a leaked playback at exit.
+		await get_tree().create_timer(0.9).timeout
 		get_tree().quit(0)
 	else:
 		print("INVENTORY FAILED (%d)" % _failures)

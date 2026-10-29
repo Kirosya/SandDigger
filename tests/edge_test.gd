@@ -35,9 +35,10 @@ func _ready() -> void:
 	_check("mid strength is green", mid.g > mid.r and mid.g > mid.b)
 	_check("near strength is red", near.r > near.g and near.r > near.b)
 
-	# A strong ping flashes bright and takes the hot colour.
+	# A strong ping flashes bright and takes the hot colour. Sampled 0.10 s in,
+	# past the 0.05 s ramp: sampling at 0.06 s raced the tween on slow frames.
 	hud._pulse_edge(1.0)
-	await get_tree().create_timer(0.06).timeout
+	await get_tree().create_timer(0.10).timeout
 	var strong_alpha := edge.modulate.a
 	_check("strong ping lights the edge", strong_alpha > 0.4)
 	_check("strong ping uses the hot colour", edge.modulate.r > edge.modulate.g)
@@ -46,13 +47,13 @@ func _ready() -> void:
 
 	# A weak ping is a much dimmer wash.
 	hud._pulse_edge(0.0)
-	await get_tree().create_timer(0.06).timeout
+	await get_tree().create_timer(0.10).timeout
 	_check("weak ping is dimmer than strong", edge.modulate.a < strong_alpha * 0.5)
 
 	# The real detector path (audio beep) must drive the overlay too.
 	await get_tree().create_timer(0.55).timeout
 	hud._fire_ping()
-	await get_tree().create_timer(0.06).timeout
+	await get_tree().create_timer(0.10).timeout
 	_check("detector beep drives the edge", edge.modulate.a > 0.05)
 
 	_finish()
