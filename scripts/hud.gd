@@ -30,10 +30,12 @@ var _status_text := ""
 var _banner: Label
 var _banner_tween: Tween
 
-## Bag bar: the two equipped tools (shovel, detector) on the left, then the seven
-## loot slots in fixed positions. The active tool / held slot glows gold.
-const TOOL_PANEL_WIDTH := 122.0
+## Bag bar: one hotbar row. Slots 1 and 2 are the shovel and detector, pinned to
+## the front and impossible to move; slots 3-9 are the seven loot slots. Number
+## keys and the mouse wheel walk the whole row and the selected slot glows gold.
 const SLOT_WIDTH := 106.0
+## Nine equal slots plus eight 8 px gaps.
+const BAR_WIDTH := 9.0 * SLOT_WIDTH + 8.0 * 8.0
 
 var _slot_panels: Array[Panel] = []
 var _slot_labels: Array[Label] = []
@@ -128,7 +130,7 @@ func _build() -> void:
 	hint.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
 	hint.position += Vector2(-460, -92)
 	hint.size = Vector2(920, 24)
-	hint.text = "Click: dig / detector   1-7: hold item   E: pick up / sell   Q: swap tool   R: third person   Esc: pause"
+	hint.text = "Click: dig / detector   Wheel or 1-9: slot   E: pick up / sell   Q: swap tool   R: third person   Esc: pause"
 	root.add_child(hint)
 
 
@@ -196,37 +198,32 @@ func _make_label(font_size: int, color: Color) -> Label:
 	return label
 
 
-## Two equipment panels (shovel + detector) followed by the seven bag slots, in
-## a row at the bottom of the screen. Items keep their slot: selling one leaves
-## its box empty instead of sliding the rest along.
+## One uniform row: shovel, detector, then the seven bag slots. Tools are pinned
+## to the first two positions and can never be moved. Items keep their slot:
+## selling one leaves its box empty instead of sliding the rest along.
 func _build_inventory_bar(root: Control) -> void:
 	var bar := HBoxContainer.new()
 	bar.name = "Inventory"
 	bar.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
-	bar.position += Vector2(-534, -62)
+	bar.position += Vector2(-BAR_WIDTH * 0.5, -62)
 	bar.add_theme_constant_override("separation", 8)
 	bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	root.add_child(bar)
 
-	# Equipped tools.
+	# Slots 1-2: the tools, fixed at the front of the same bar as the loot.
 	for i in 2:
-		var panel := _make_inventory_panel(TOOL_PANEL_WIDTH)
+		var panel := _make_inventory_panel(SLOT_WIDTH)
 		var label := _make_slot_label(11)
 		panel.add_child(label)
 		bar.add_child(panel)
 		_tool_panels.append(panel)
 		_tool_labels.append(label)
 
-	var divider := Control.new()
-	divider.custom_minimum_size = Vector2(10, 0)
-	divider.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	bar.add_child(divider)
-
-	# Loot slots, numbered 1-7.
+	# Slots 3-9: loot, numbered the same as the keys that select them.
 	for i in PlayerState.INVENTORY_SLOTS:
 		var panel := _make_inventory_panel(SLOT_WIDTH)
 		var label := _make_slot_label(11)
-		label.text = "%d\n-" % (i + 1)
+		label.text = "%d\n-" % PlayerState.hotbar_number(i + PlayerState.FIRST_BAG_SLOT)
 		panel.add_child(label)
 		bar.add_child(panel)
 		_slot_panels.append(panel)
@@ -259,15 +256,13 @@ func _refresh_inventory() -> void:
 	if _player == null:
 		return
 
-	# --- Equipment -----------------------------------------------------
-	var active_tool := _player_node.tool_mode if _player_node != null else 0
-	var holding := _player.held_slot >= 0
+	# --- Hotbar ---------------------------------------------------------
+	var selected := _current_hotbar()
 	_set_tool_panel(0, "SHOVEL", _player.get_current_equipment().display_name,
-		true, not holding and active_tool == FirstPersonPlayer.TOOL_SHOVEL, Color.WHITE)
+		true, selected == PlayerState.SLOT_SHOVEL, Color.WHITE)
 	if _player.has_detector:
 		_set_tool_panel(1, "DETECTOR", "ready", true,
-			not holding and active_tool == FirstPersonPlayer.TOOL_DETECTOR,
-			Color(0.55, 0.95, 1.0))
+			selected == PlayerState.SLOT_DETECTOR, Color(0.55, 0.95, 1.0))
 	else:
 		_set_tool_panel(1, "DETECTOR", "$%d market" % int(PlayerState.DETECTOR_PRICE),
 			false, false, Color(0.62, 0.62, 0.66))
@@ -279,24 +274,33 @@ func _refresh_inventory() -> void:
 		var style := panel.get_theme_stylebox("panel") as StyleBoxFlat
 		var slot: Dictionary = _player.bag_slots[i] if i < _player.bag_slots.size() else {}
 		var filled := not slot.is_empty()
+		var number := PlayerState.hotbar_number(i + PlayerState.FIRST_BAG_SLOT)
 		var held := filled and i == _player.held_slot
 		if filled:
 			label.text = "%d  %s\n$%d" % [
-				i + 1, str(slot.get("name", "?")), int(slot.get("value", 0))]
+				number, str(slot.get("name", "?")), int(slot.get("value", 0))]
 			label.add_theme_color_override("font_color",
 				GOLD if held else Color(1, 1, 1, 0.85))
 		else:
-			label.text = "%d\n-" % (i + 1)
+			label.text = "%d\n-" % number
 			label.add_theme_color_override("font_color", Color(1, 1, 1, 0.3))
 		if style != null:
 			style.bg_color = Color(0.34, 0.27, 0.1, 0.8) if held else Color(0.05, 0.06, 0.08, 0.55)
 			style.border_color = GOLD if held else Color(1, 1, 1, 0.18)
 
 
+## Hotbar slot in hand, matching DigController: a held item, else the tool.
+func _current_hotbar() -> int:
+	if _player == null:
+		return PlayerState.SLOT_SHOVEL
+	var detector := _player_node != null and _player_node.tool_mode == FirstPersonPlayer.TOOL_DETECTOR
+	return PlayerState.hotbar_index(_player.held_slot, detector)
+
+
 func _set_tool_panel(index: int, header: String, value: String, owned: bool,
 		active: bool, color: Color) -> void:
 	var label := _tool_labels[index]
-	label.text = "%s\n%s" % [header, value]
+	label.text = "%d  %s\n%s" % [PlayerState.hotbar_number(index), header, value]
 	label.add_theme_color_override("font_color", GOLD if active else color)
 	var style := _tool_panels[index].get_theme_stylebox("panel") as StyleBoxFlat
 	if style == null:

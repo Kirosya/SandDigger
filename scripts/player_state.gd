@@ -24,6 +24,15 @@ const XP_PER_CUBIC_METER := 150.0
 ## The bag holds exactly this many loot items. Nothing stacks.
 const INVENTORY_SLOTS := 7
 
+## The hotbar is ONE row: the shovel (slot 0) and the detector (slot 1) are
+## pinned to the front and can never be moved or swapped, then the bag slots
+## follow. Number keys and the mouse wheel walk the whole row, so tools and loot
+## are selected the same way.
+const SLOT_SHOVEL := 0
+const SLOT_DETECTOR := 1
+const FIRST_BAG_SLOT := 2
+const SLOT_COUNT := FIRST_BAG_SLOT + INVENTORY_SLOTS
+
 ## What the market charges for the metal detector.
 const DETECTOR_PRICE := 35.0
 
@@ -185,6 +194,27 @@ func held_item() -> Dictionary:
 	if held_slot < 0 or held_slot >= bag_slots.size():
 		return {}
 	return bag_slots[held_slot]
+
+
+## Hotbar slot that is currently in hand. A held bag item always wins; otherwise
+## it is the tool in hand. `detector_in_hand` comes from the player body, which
+## owns the shovel/detector visual.
+static func hotbar_index(held_slot: int, detector_in_hand: bool) -> int:
+	if held_slot >= 0:
+		return FIRST_BAG_SLOT + held_slot
+	return SLOT_DETECTOR if detector_in_hand else SLOT_SHOVEL
+
+
+## Bag index for a hotbar slot, or -1 for the two tool slots.
+static func bag_index_of(hotbar: int) -> int:
+	if hotbar < FIRST_BAG_SLOT:
+		return -1
+	return hotbar - FIRST_BAG_SLOT
+
+
+## Number shown on a hotbar slot in the HUD (1-based, the key that selects it).
+static func hotbar_number(hotbar: int) -> int:
+	return hotbar + 1
 
 
 ## Puts bag slot `index` in hand. Pressing the same slot again puts it away.

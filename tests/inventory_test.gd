@@ -30,6 +30,8 @@ func _ready() -> void:
 	if state == null:
 		_finish()
 		return
+	var dig := player.get_node_or_null("DigController") as DigController
+	_check("player has a dig controller", dig != null)
 
 	# --- Seven-slot bag -----------------------------------------------------
 	for i in PlayerState.INVENTORY_SLOTS:
@@ -76,6 +78,11 @@ func _ready() -> void:
 
 	# --- Detector is a bought hand tool ------------------------------------
 	_check("no detector at the start", not state.has_detector)
+	# Slot 2 is the detector's fixed place on the hotbar. Without owning one it
+	# must not switch the hand.
+	dig._select_hotbar(PlayerState.SLOT_DETECTOR)
+	_check("slot 2 does nothing without a detector",
+		player.tool_mode == FirstPersonPlayer.TOOL_SHOVEL and state.held_slot == -1)
 	state.add_money(PlayerState.DETECTOR_PRICE)
 	var money_before_detector := state.current_money
 	_check("detector can be bought", state.buy_detector())
@@ -98,6 +105,72 @@ func _ready() -> void:
 	_check("held item pivot is visible", player.item_pivot.visible)
 	_check("held item has a mesh in hand", player.item_pivot.get_child_count() > 0)
 	_check("the tool is put away while holding loot", not player.spoon_pivot.visible)
+
+	# --- Unified hotbar: tools and loot in one numbered row ----------------
+	_check("hotbar is the two tools plus the seven bag slots",
+		PlayerState.SLOT_COUNT == PlayerState.FIRST_BAG_SLOT + PlayerState.INVENTORY_SLOTS)
+	_check("shovel is hotbar slot 1", PlayerState.hotbar_index(-1, false) == PlayerState.SLOT_SHOVEL)
+	_check("detector is hotbar slot 2", PlayerState.hotbar_index(-1, true) == PlayerState.SLOT_DETECTOR)
+	_check("a held item maps to its bag slot", PlayerState.hotbar_index(3, false) == 5)
+	_check("bag slots start at the third slot",
+		PlayerState.bag_index_of(PlayerState.FIRST_BAG_SLOT) == 0)
+	_check("tool slots have no bag index",
+		PlayerState.bag_index_of(PlayerState.SLOT_DETECTOR) == -1)
+
+	# Slot 2 puts the detector in hand and stows whatever was held.
+	dig._select_hotbar(PlayerState.SLOT_DETECTOR)
+	_check("slot 2 puts the detector in hand",
+		player.tool_mode == FirstPersonPlayer.TOOL_DETECTOR and state.held_slot == -1)
+	dig._select_hotbar(PlayerState.SLOT_SHOVEL)
+	_check("slot 1 puts the shovel back",
+		player.tool_mode == FirstPersonPlayer.TOOL_SHOVEL and state.held_slot == -1)
+
+	dig._select_hotbar(PlayerState.FIRST_BAG_SLOT + 2)
+	_check("slot 5 holds bag item 3", state.held_slot == 2)
+	_check("a bag item hides the tool", player.item_pivot.visible)
+	dig._cycle_hotbar(1)
+	_check("wheel down goes to the next bag slot", state.held_slot == 3)
+	dig._cycle_hotbar(-1)
+	_check("wheel up comes back", state.held_slot == 2)
+
+	# --- Left click sells at the junkyard, exactly like E -----------------
+	var yard := Junkyard.new()
+	yard.name = "TestJunkyard"
+	add_child(yard)
+	await get_tree().process_frame
+	yard.global_position = player.global_position
+	var money_before_click := state.current_money
+	dig._primary_action()
+	print("INV click sell held=%d money=%.0f bag=%d" % [
+		state.held_slot, state.current_money, state.carried_count()])
+	_check("left click sells the held item at the junkyard",
+		state.held_slot == -1 and state.current_money > money_before_click)
+	_check("left click sold only the held item", state.bag_slots[2].is_empty())
+
+	# The same click away from the junkyard must not sell anything.
+	yard.global_position = player.global_position + Vector3(0.0, 0.0, 40.0)
+	state.set_held_slot(1)
+	var money_before_far := state.current_money
+	dig._primary_action()
+	_check("a click away from the junkyard does not sell",
+		state.held_slot == 1 and is_equal_approx(state.current_money, money_before_far))
+
+	# An empty bag slot is skipped instead of becoming a dead stop.
+	dig._cycle_hotbar(1)
+	_check("wheel skips an empty bag slot", state.held_slot == 3)
+	state.set_held_slot(-1)
+	yard.queue_free()
+	await get_tree().process_frame
+
+	# The wheel itself is bound, not just the helper it calls.
+	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	dig._select_hotbar(PlayerState.FIRST_BAG_SLOT)
+	var wheel := InputEventMouseButton.new()
+	wheel.button_index = MOUSE_BUTTON_WHEEL_DOWN
+	wheel.pressed = true
+	dig._unhandled_input(wheel)
+	_check("mouse wheel down changes the slot", state.held_slot == 1)
+	state.set_held_slot(-1)
 
 	# --- Sequential shovel upgrades ----------------------------------------
 	state.add_money(50.0)

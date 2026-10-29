@@ -7,9 +7,10 @@ extends Node
 ## is rate limited so a held button cannot delete the beach in one frame.
 ##
 ## Left click also fires the metal detector when it is the tool in hand. Keys
-## 1-7 pick up a bag slot (one item at a time) and Q swaps shovel <-> detector.
-## The junkyard only buys the item actually in hand; the market stall sells the
-## detector and the shovel upgrades.
+## 1-9 pick a hotbar slot (1 shovel, 2 detector, 3-9 bag items) and Q swaps
+## shovel <-> detector. The mouse wheel walks the same row. The junkyard buys
+## only the item actually in hand, from E or a left click; the market stall sells
+## the detector and the shovel upgrades.
 ##
 ## Phase 3 turns `_try_dig()` into a `request_dig` RPC and moves the heightmap
 ## mutation to the host; nothing else in this script changes.
@@ -86,6 +87,15 @@ func _process(delta: float) -> void:
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
 		var mouse_event := event as InputEventMouseButton
+		# The wheel walks the same hotbar as the number keys, tools included.
+		# Menus pause the tree (or consume the event), so no extra guard is
+		# needed: a visible cursor only happens while those are up.
+		if mouse_event.pressed and mouse_event.button_index == MOUSE_BUTTON_WHEEL_UP:
+			_cycle_hotbar(-1)
+			return
+		if mouse_event.pressed and mouse_event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+			_cycle_hotbar(1)
+			return
 		if mouse_event.button_index == MOUSE_BUTTON_LEFT:
 			_digging = mouse_event.pressed and _shovel_in_hand()
 			if mouse_event.pressed and _mouse_captured():
@@ -98,8 +108,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		_switch_tool()
 	elif event is InputEventKey and event.pressed and not event.echo:
 		var key := (event as InputEventKey).keycode
-		if key >= KEY_1 and key <= KEY_7:
-			_select_slot(key - KEY_1)
+		if key >= KEY_1 and key <= KEY_9:
+			_select_hotbar(key - KEY_1)
 
 
 func _mouse_captured() -> bool:
@@ -115,15 +125,33 @@ func _shovel_in_hand() -> bool:
 		and not _holding_loot())
 
 
-## Left click: fire the detector when it is in hand, otherwise dig.
+## Left click: sell at the junkyard when an item is held, fire the detector when
+## it is in hand, otherwise dig.
 func _primary_action() -> void:
 	if _holding_loot():
+		# Standing at the junkyard, a click is a sale just like E.
+		if _at_junkyard():
+			_sell_held()
 		return
 	if _player_body.tool_mode == FirstPersonPlayer.TOOL_DETECTOR:
 		_use_detector()
 		return
 	if _dig_cooldown <= 0.0:
 		_try_dig()
+
+
+## The junkyard stall, or null when the scene has none.
+func _junkyard() -> Node3D:
+	return get_tree().get_first_node_in_group("junkyard") as Node3D
+
+
+## True while this player stands close enough to sell.
+func _at_junkyard() -> bool:
+	if _player_body == null:
+		return false
+	var yard := _junkyard()
+	return yard != null \
+		and _player_body.global_position.distance_to(yard.global_position) <= Junkyard.SELL_RADIUS
 
 
 func _try_dig() -> void:
@@ -164,8 +192,7 @@ func _interact() -> void:
 		return
 
 	# Junkyard buys ONLY the item in hand, one sale per press.
-	var yard := get_tree().get_first_node_in_group("junkyard") as Node3D
-	if yard != null and position.distance_to(yard.global_position) <= Junkyard.SELL_RADIUS:
+	if _at_junkyard():
 		_sell_held()
 		return
 
@@ -191,21 +218,83 @@ func _on_loot_claimed(item: Dictionary) -> void:
 		_state.carried_count(), PlayerState.INVENTORY_SLOTS])
 
 
+## Picks a hotbar slot by its index (0 = shovel, 1 = detector, 2+ = bag slots).
+func _select_hotbar(index: int) -> void:
+	if _state == null or _player_body == null:
+		return
+	if index < 0 or index >= PlayerState.SLOT_COUNT:
+		return
+	if index == PlayerState.SLOT_SHOVEL:
+		_hold_tool(FirstPersonPlayer.TOOL_SHOVEL)
+		return
+	if index == PlayerState.SLOT_DETECTOR:
+		if not _state.has_detector:
+			Sfx.play_ui("denied", 0.04, -8.0)
+			_flash_hud("No detector yet - buy one at the market ($%d)"
+				% int(PlayerState.DETECTOR_PRICE))
+			return
+		_hold_tool(FirstPersonPlayer.TOOL_DETECTOR)
+		return
+	_select_slot(PlayerState.bag_index_of(index))
+
+
+## Puts a tool in hand, putting away whatever item was being held.
+func _hold_tool(mode: int) -> void:
+	if _state.held_slot >= 0:
+		_state.set_held_slot(-1)
+	_player_body.set_tool_mode(mode)
+
+
 ## Puts the item in bag slot `index` in hand (pressing it again puts it away).
 func _select_slot(index: int) -> void:
 	if _state == null:
 		return
 	if index < 0 or index >= _state.bag_slots.size() or _state.bag_slots[index].is_empty():
-		_flash_hud("Slot %d is empty" % (index + 1))
+		_flash_hud("Slot %d is empty" % PlayerState.hotbar_number(index + PlayerState.FIRST_BAG_SLOT))
 		return
 	_state.set_held_slot(index)
+
+
+## The hotbar slot in hand right now.
+func _current_hotbar() -> int:
+	if _state == null or _player_body == null:
+		return PlayerState.SLOT_SHOVEL
+	return PlayerState.hotbar_index(_state.held_slot,
+		_player_body.tool_mode == FirstPersonPlayer.TOOL_DETECTOR)
+
+
+## True when a hotbar slot can actually be selected.
+func _hotbar_slot_usable(index: int) -> bool:
+	if _state == null:
+		return false
+	if index == PlayerState.SLOT_DETECTOR:
+		return _state.has_detector
+	if index < PlayerState.FIRST_BAG_SLOT:
+		return true
+	var bag := PlayerState.bag_index_of(index)
+	return bag < _state.bag_slots.size() and not _state.bag_slots[bag].is_empty()
+
+
+## Mouse wheel: steps through the hotbar in either direction, skipping slots the
+## player cannot use (an unowned detector, an empty bag slot) and wrapping.
+func _cycle_hotbar(step: int) -> void:
+	if _state == null:
+		return
+	var slot := _current_hotbar()
+	for i in PlayerState.SLOT_COUNT:
+		slot = wrapi(slot + step, 0, PlayerState.SLOT_COUNT)
+		if _hotbar_slot_usable(slot):
+			_select_hotbar(slot)
+			return
 
 
 func _sell_held() -> void:
 	var item := _state.sell_held()
 	if item.is_empty():
 		Sfx.play_ui("denied", 0.04, -8.0)
-		_flash_hud("Hold an item first - press 1-7")
+		_flash_hud("Hold an item first - press %d-%d or scroll" % [
+			PlayerState.hotbar_number(PlayerState.FIRST_BAG_SLOT),
+			PlayerState.hotbar_number(PlayerState.SLOT_COUNT - 1)])
 		return
 	Sfx.play_ui("coin", 0.06, -3.0)
 	_flash_hud("Sold %s for $%d" % [str(item.get("name", "item")), int(item.get("value", 0))])
@@ -243,7 +332,8 @@ func _update_tool_status() -> void:
 	var held := _state.held_item()
 	if not held.is_empty():
 		_hud.set_detector_status("In hand: %s  ($%d)  -  press %d to put away" % [
-			str(held.get("name", "item")), int(held.get("value", 0)), _state.held_slot + 1])
+			str(held.get("name", "item")), int(held.get("value", 0)),
+			PlayerState.hotbar_number(_state.held_slot + PlayerState.FIRST_BAG_SLOT)])
 		return
 	if _player_body.tool_mode == FirstPersonPlayer.TOOL_DETECTOR:
 		if _detector_cooldown > 0.0:
@@ -265,16 +355,17 @@ func _update_prompt() -> void:
 		_hud.show_prompt("[E] Open the market")
 		return
 
-	var yard := get_tree().get_first_node_in_group("junkyard") as Node3D
-	if yard != null and position.distance_to(yard.global_position) <= Junkyard.SELL_RADIUS:
+	if _at_junkyard():
 		var held := _state.held_item()
 		if not held.is_empty():
-			_hud.show_prompt("[E] Sell %s  ($%d)" % [
+			_hud.show_prompt("[E] or left click: Sell %s  ($%d)" % [
 				str(held.get("name", "item")), int(held.get("value", 0))])
 		elif _state.carried_count() == 0:
 			_hud.show_prompt("Junkyard - nothing to sell yet")
 		else:
-			_hud.show_prompt("Junkyard - hold an item (1-7) to sell it")
+			_hud.show_prompt("Junkyard - hold an item (%d-%d) to sell it" % [
+				PlayerState.hotbar_number(PlayerState.FIRST_BAG_SLOT),
+				PlayerState.hotbar_number(PlayerState.SLOT_COUNT - 1)])
 		return
 
 	if _loot != null:

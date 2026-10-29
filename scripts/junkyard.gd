@@ -44,7 +44,7 @@ func _build() -> void:
 
 	# Sign.
 	var sign_label := Label3D.new()
-	sign_label.text = "JUNKYARD\n[E] sell held"
+	sign_label.text = "JUNKYARD\n[E] / click: sell held"
 	sign_label.font_size = 48
 	sign_label.pixel_size = 0.003
 	sign_label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
