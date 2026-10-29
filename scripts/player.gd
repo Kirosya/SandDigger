@@ -69,6 +69,9 @@ var _held_item: Dictionary = {}
 var _item_visual: MeshInstance3D
 var _item_visual_id := -1
 var _step_timer := 0.0
+## This body's own progression, used to tell which hotbar slot is selected (and
+## therefore whether the tool, a loot item or nothing at all is in hand).
+var _state: PlayerState
 
 
 func _ready() -> void:
@@ -76,9 +79,9 @@ func _ready() -> void:
 	global_position = spawn_point
 	mouse_sensitivity = GameSettings.mouse_sensitivity
 
-	var state := get_node_or_null("PlayerState") as PlayerState
-	if state != null:
-		state.player_id = player_id
+	_state = get_node_or_null("PlayerState") as PlayerState
+	if _state != null:
+		_state.player_id = player_id
 
 	if not is_local_player():
 		_setup_remote()
@@ -93,11 +96,11 @@ func _ready() -> void:
 	if third_camera != null:
 		third_camera.current = false
 
-	if state != null:
-		state.equipment_changed.connect(apply_equipment)
-		state.inventory_changed.connect(_on_inventory_changed)
-		state.leveled_up.connect(_on_leveled_up)
-		apply_equipment(state.get_current_equipment())
+	if _state != null:
+		_state.equipment_changed.connect(apply_equipment)
+		_state.inventory_changed.connect(_on_inventory_changed)
+		_state.leveled_up.connect(_on_leveled_up)
+		apply_equipment(_state.get_current_equipment())
 	_update_hand_visuals()
 
 
@@ -155,11 +158,16 @@ func apply_equipment(equipment: EquipmentData) -> void:
 		.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 
 
-## Swaps which tool the first-person hand holds.
+## Swaps which tool the first-person hand holds and moves the hotbar cursor to
+## that tool's slot, so the highlight always matches what is in hand.
 func set_tool_mode(mode: int) -> void:
 	var next := TOOL_DETECTOR if mode == TOOL_DETECTOR else TOOL_SHOVEL
 	var changed := next != tool_mode
 	tool_mode = next
+	if _state != null:
+		var slot := PlayerState.SLOT_DETECTOR if next == TOOL_DETECTOR else PlayerState.SLOT_SHOVEL
+		if _state.selected_slot != slot:
+			_state.select_slot(slot)
 	_update_hand_visuals()
 	if changed:
 		tool_mode_changed.emit(tool_mode)
@@ -181,22 +189,32 @@ func _on_inventory_changed(slots: Array[Dictionary], held_slot: int) -> void:
 	_update_hand_visuals()
 
 
-## Only one thing is ever visible in the hand: the held loot, else the detector,
-## else the shovel. The viewmodel hands follow whatever is held.
+## Only one thing is ever visible in the hand: the held loot, else the tool of the
+## selected tool slot, else nothing at all (an empty bag slot or a sold item).
+## The viewmodel hands follow whatever is held, and only the shovel needs both.
 func _update_hand_visuals() -> void:
 	if spoon_pivot == null:
 		return
 	var holding := not _held_item.is_empty()
-	spoon_pivot.visible = not holding and tool_mode == TOOL_SHOVEL
-	detector_pivot.visible = not holding and tool_mode == TOOL_DETECTOR
+	var tool_in_hand := _state == null or _state.selected_slot < PlayerState.FIRST_BAG_SLOT
+	var shovel := not holding and tool_in_hand and tool_mode == TOOL_SHOVEL
+	var detector := not holding and tool_in_hand and tool_mode == TOOL_DETECTOR
+	spoon_pivot.visible = shovel
+	detector_pivot.visible = detector
 	item_pivot.visible = holding
 	if holding:
 		_build_item_visual()
-		rig.set_tool_pivot(item_pivot, 0.0, 0.07)
-	elif tool_mode == TOOL_DETECTOR:
-		rig.set_tool_pivot(detector_pivot, 0.02, 0.09)
-	else:
-		rig.set_tool_pivot(spoon_pivot, CharacterRig.RIGHT_GRIP_Z, CharacterRig.LEFT_GRIP_Z)
+		# A piece of junk is picked up with one hand.
+		rig.set_tool_pivot(item_pivot, 0.0, 0.07, false)
+	elif detector:
+		# The detector is a one-handed wand; the spare arm would clutch air.
+		rig.set_tool_pivot(detector_pivot, 0.02, 0.09, false)
+	elif shovel:
+		# A shovel has a long handle and is swung with both hands.
+		rig.set_tool_pivot(spoon_pivot, CharacterRig.RIGHT_GRIP_Z, CharacterRig.LEFT_GRIP_Z, true)
+	# Nothing in hand (empty bag slot, or the item was just sold): the viewmodel
+	# hands would be gripping thin air, so they are hidden too.
+	rig.set_viewmodel_visible(holding or shovel or detector)
 
 
 ## Rebuilds the little junk model in the hand only when the held item changes.

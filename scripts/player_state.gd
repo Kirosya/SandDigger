@@ -69,8 +69,28 @@ var carried_loot: Array[Dictionary]:
 				items.append(slot)
 		return items
 
-## Which bag slot is held in hand. -1 means empty-handed (the tool is in hand).
-var held_slot: int = -1
+## Hotbar cursor: the slot the player has selected, 0..SLOT_COUNT-1. Slots 0 and
+## 1 are the tools; every later index is a bag slot, and a bag slot may be empty.
+## Selecting an empty slot means genuinely empty hands.
+var selected_slot: int = SLOT_SHOVEL
+
+## True when the selected bag slot still holds an item but the player pressed
+## that same slot again to stow it. The hand is empty and the cursor stays put.
+var _stowed := false
+
+## Bag slot whose item is in hand, or -1 when nothing is in hand (a tool is in
+## hand, or the selected bag slot is empty/stowed). Derived from selected_slot,
+## so the hand and the highlighted slot can never disagree.
+var held_slot: int:
+	get:
+		if _stowed:
+			return -1
+		var bag := bag_index_of(selected_slot)
+		if bag < 0 or bag >= bag_slots.size():
+			return -1
+		if bag_slots[bag].is_empty():
+			return -1
+		return bag
 
 
 func _ready() -> void:
@@ -177,12 +197,16 @@ func is_inventory_full() -> bool:
 
 
 ## Puts a claimed loot item in the first empty slot. Returns false when full.
-## The slot index is kept for as long as the item is in the bag.
+## The slot index is kept for as long as the item is in the bag. Picking loot up
+## never yanks it into the hand: if it lands on the selected (empty) slot, the
+## hand simply stays empty.
 func add_loot(item: Dictionary) -> bool:
 	_ensure_bag()
 	for i in bag_slots.size():
 		if bag_slots[i].is_empty():
 			bag_slots[i] = item
+			if i == bag_index_of(selected_slot):
+				_stowed = true
 			_emit_inventory()
 			return true
 	return false
@@ -217,28 +241,68 @@ static func hotbar_number(hotbar: int) -> int:
 	return hotbar + 1
 
 
-## Puts bag slot `index` in hand. Pressing the same slot again puts it away.
-## Empty slots cannot be held.
+## Puts bag slot `index` in hand. Pressing the same slot again stows the item and
+## leaves the hand empty, but the hotbar cursor stays on that slot.
+## Empty slots are selectable too: they simply mean empty hands.
 func set_held_slot(index: int) -> void:
-	_ensure_bag()
-	if index < 0 or index >= bag_slots.size() or bag_slots[index].is_empty():
-		if held_slot != -1:
-			held_slot = -1
-			_emit_inventory()
+	if index < 0:
+		put_away()
 		return
-	held_slot = -1 if held_slot == index else index
+	var bag := bag_index_of(selected_slot)
+	if bag >= 0 and index == bag:
+		# Already on this bag slot: toggle the item in and out of the hand.
+		_stowed = not _stowed
+		_emit_inventory()
+		return
+	select_slot(FIRST_BAG_SLOT + index)
+
+
+## Moves the hotbar cursor. Pressing the already-selected filled bag slot again
+## stows that item; the cursor stays there so selling or stowing leaves the
+## player empty-handed on the slot they chose instead of jumping to another item.
+func select_slot(index: int) -> void:
+	_ensure_bag()
+	index = clampi(index, 0, SLOT_COUNT - 1)
+	var bag := bag_index_of(index)
+	if index == selected_slot and bag >= 0 and not bag_slots[bag].is_empty():
+		_stowed = not _stowed
+	else:
+		_stowed = false
+	selected_slot = index
 	_emit_inventory()
 
 
+## Empties the hand without moving the cursor off a bag slot. From a tool slot
+## this falls back to the shovel, which is the default hand.
+func put_away() -> void:
+	_ensure_bag()
+	var bag := bag_index_of(selected_slot)
+	if bag < 0:
+		if selected_slot != SLOT_SHOVEL:
+			select_slot(SLOT_SHOVEL)
+		return
+	if _stowed:
+		return
+	_stowed = true
+	_emit_inventory()
+
+
+## True when the selected slot is a bag slot with nothing to hold (empty, or the
+## item there was stowed). The player is then unarmed: no digging, no detector.
+func is_hand_empty() -> bool:
+	return bag_index_of(selected_slot) >= 0 and held_slot < 0
+
+
 ## Sells ONLY the item in hand. Returns the sold item, or {} when empty-handed.
-## The sold item's slot becomes empty and stays empty: the other items keep the
-## slots they were picked up into.
+## The sold slot becomes empty and the cursor deliberately STAYS on it, so after
+## a sale the player is empty-handed on that slot instead of jumping to the
+## shovel or to another item.
 func sell_held() -> Dictionary:
 	var item := held_item()
 	if item.is_empty():
 		return {}
 	bag_slots[held_slot] = {}
-	held_slot = -1
+	_stowed = false
 	add_money(float(item.get("value", 0.0)))
 	_emit_inventory()
 	return item

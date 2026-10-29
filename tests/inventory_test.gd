@@ -121,17 +121,57 @@ func _ready() -> void:
 	dig._select_hotbar(PlayerState.SLOT_DETECTOR)
 	_check("slot 2 puts the detector in hand",
 		player.tool_mode == FirstPersonPlayer.TOOL_DETECTOR and state.held_slot == -1)
+	_check("the detector is held in one hand",
+		player.rig._right_arm.visible and not player.rig._left_arm.visible)
 	dig._select_hotbar(PlayerState.SLOT_SHOVEL)
 	_check("slot 1 puts the shovel back",
 		player.tool_mode == FirstPersonPlayer.TOOL_SHOVEL and state.held_slot == -1)
+	_check("the shovel is held in both hands",
+		player.rig._right_arm.visible and player.rig._left_arm.visible)
 
 	dig._select_hotbar(PlayerState.FIRST_BAG_SLOT + 2)
 	_check("slot 5 holds bag item 3", state.held_slot == 2)
 	_check("a bag item hides the tool", player.item_pivot.visible)
+	_check("junk is held in one hand, not two",
+		player.rig._right_arm.visible and not player.rig._left_arm.visible)
 	dig._cycle_hotbar(1)
 	_check("wheel down goes to the next bag slot", state.held_slot == 3)
 	dig._cycle_hotbar(-1)
 	_check("wheel up comes back", state.held_slot == 2)
+
+	# --- An empty slot is a valid choice: empty hands ----------------------
+	# Empty a slot by selling what it held: the cursor stays on it.
+	var empty_bag := 6
+	state.select_slot(PlayerState.FIRST_BAG_SLOT + empty_bag)
+	state.sell_held()
+	_check("a sold slot is empty but still selected",
+		state.bag_slots[empty_bag].is_empty()
+		and state.selected_slot == PlayerState.FIRST_BAG_SLOT + empty_bag
+		and state.held_slot == -1)
+	dig._select_hotbar(PlayerState.SLOT_SHOVEL)
+	dig._select_hotbar(PlayerState.FIRST_BAG_SLOT + empty_bag)
+	_check("an empty slot can be selected",
+		state.selected_slot == PlayerState.FIRST_BAG_SLOT + empty_bag)
+	_check("an empty slot means empty hands",
+		state.held_slot == -1 and state.is_hand_empty())
+	_check("empty hands show no tool and no item",
+		not player.spoon_pivot.visible and not player.detector_pivot.visible
+		and not player.item_pivot.visible)
+	_check("empty hands hide both viewmodel arms",
+		not player.rig._right_arm.visible and not player.rig._left_arm.visible)
+	# A tool click while empty-handed must not dig or swing anything.
+	dig._primary_action()
+	_check("left click with empty hands does nothing",
+		dig._dig_count == 0 and not player.spoon_pivot.visible)
+
+	# Pressing the selected filled slot again stows the item but keeps the slot.
+	dig._select_hotbar(PlayerState.FIRST_BAG_SLOT + 2)
+	dig._select_hotbar(PlayerState.FIRST_BAG_SLOT + 2)
+	_check("pressing the selected slot again stows the item", state.held_slot == -1)
+	_check("stowing keeps the cursor on that slot",
+		state.selected_slot == PlayerState.FIRST_BAG_SLOT + 2)
+	dig._select_hotbar(PlayerState.FIRST_BAG_SLOT + 2)
+	_check("pressing it once more holds it again", state.held_slot == 2)
 
 	# --- Left click sells at the junkyard, exactly like E -----------------
 	var yard := Junkyard.new()
@@ -146,6 +186,13 @@ func _ready() -> void:
 	_check("left click sells the held item at the junkyard",
 		state.held_slot == -1 and state.current_money > money_before_click)
 	_check("left click sold only the held item", state.bag_slots[2].is_empty())
+	_check("after a sale the hand stays empty on the same slot",
+		state.selected_slot == PlayerState.FIRST_BAG_SLOT + 2
+		and state.is_hand_empty())
+	_check("after a sale no other item jumps into the hand",
+		not player.item_pivot.visible and not player.spoon_pivot.visible)
+	_check("after a sale the cursor did not move to another slot",
+		state.held_slot == -1)
 
 	# The same click away from the junkyard must not sell anything.
 	yard.global_position = player.global_position + Vector3(0.0, 0.0, 40.0)

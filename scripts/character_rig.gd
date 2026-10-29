@@ -39,6 +39,11 @@ var _right_arm: Node3D
 var _left_arm: Node3D
 var _right_grip_z := RIGHT_GRIP_Z
 var _left_grip_z := LEFT_GRIP_Z
+## Shovels are swung with two hands; a detector wand or a piece of junk is held
+## in one, so the second arm is hidden instead of clutching empty air.
+var _two_handed := true
+## False when nothing is in hand at all: both viewmodel arms are hidden.
+var _arms_visible := true
 var _materials: Dictionary = {}
 
 
@@ -67,24 +72,24 @@ func _ready() -> void:
 
 
 ## Points the hands at whatever is in hand (shovel, detector or held loot) and
-## at the grip points on that model.
+## at the grip points on that model. `two_handed` false hides the left arm: only
+## the long-handled tools are actually held with both hands.
 func set_tool_pivot(pivot: Node3D, right_grip_z: float = RIGHT_GRIP_Z,
-		left_grip_z: float = LEFT_GRIP_Z) -> void:
+		left_grip_z: float = LEFT_GRIP_Z, two_handed: bool = true) -> void:
 	if pivot == null:
 		return
 	_pivot = pivot
 	_right_grip_z = right_grip_z
 	_left_grip_z = left_grip_z
+	_two_handed = two_handed
 	_place_arms()
 
 
 ## Remote players are watched from outside, so their floating first-person hands
 ## are switched off. Their body stays visible on the default layer.
 func set_viewmodel_visible(on: bool) -> void:
-	if _right_arm != null:
-		_right_arm.visible = on
-	if _left_arm != null:
-		_left_arm.visible = on
+	_arms_visible = on
+	_apply_arm_visibility()
 
 
 func _process(_delta: float) -> void:
@@ -93,13 +98,23 @@ func _process(_delta: float) -> void:
 
 ## Keeps both hands glued to their point on the handle, at life size, swinging
 ## with the tool. The pivot's basis is orthonormalised so tier scale never makes
-## the hands grow.
+## the hands grow. One-handed items only move the right arm.
 func _place_arms() -> void:
 	if _pivot == null:
 		return
 	var basis := _pivot.basis.orthonormalized()
 	_place_arm(_right_arm, basis, _right_grip_z, RIGHT_ARM_TILT)
 	_place_arm(_left_arm, basis, _left_grip_z, LEFT_ARM_TILT)
+	_apply_arm_visibility()
+
+
+## The left arm only exists for two-handed tools, and both vanish when nothing is
+## in hand at all.
+func _apply_arm_visibility() -> void:
+	if _right_arm != null:
+		_right_arm.visible = _arms_visible
+	if _left_arm != null:
+		_left_arm.visible = _arms_visible and _two_handed
 
 
 func _place_arm(arm: Node3D, pivot_basis: Basis, grip_z: float, tilt_degrees: Vector3) -> void:

@@ -122,7 +122,9 @@ func _read_bag(state: PlayerState, config: ConfigFile) -> void:
 			"kind": str(config.get_value(PROFILE_KEY, prefix + "kind", "trash")),
 			"value": float(config.get_value(PROFILE_KEY, prefix + "value", 0.0)),
 		}
-	state.held_slot = -1
+	# A loaded save always starts with the shovel selected: the profile stores the
+	# bag, not which slot the player happened to be looking at.
+	state.select_slot(PlayerState.SLOT_SHOVEL)
 
 
 ## Level implied by a lifetime XP total. Kept in sync with

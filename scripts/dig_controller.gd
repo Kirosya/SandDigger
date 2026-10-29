@@ -121,20 +121,25 @@ func _holding_loot() -> bool:
 
 
 func _shovel_in_hand() -> bool:
-	return (_player_body != null and _player_body.tool_mode == FirstPersonPlayer.TOOL_SHOVEL
-		and not _holding_loot())
+	return (_state != null and _state.selected_slot == PlayerState.SLOT_SHOVEL
+		and _player_body != null and _player_body.tool_mode == FirstPersonPlayer.TOOL_SHOVEL)
 
 
 ## Left click: sell at the junkyard when an item is held, fire the detector when
-## it is in hand, otherwise dig.
+## its slot is selected, dig with the shovel, and do nothing with empty hands.
 func _primary_action() -> void:
+	if _state == null:
+		return
 	if _holding_loot():
 		# Standing at the junkyard, a click is a sale just like E.
 		if _at_junkyard():
 			_sell_held()
 		return
-	if _player_body.tool_mode == FirstPersonPlayer.TOOL_DETECTOR:
+	if _state.selected_slot == PlayerState.SLOT_DETECTOR:
 		_use_detector()
+		return
+	# An empty bag slot means empty hands: there is nothing to swing.
+	if _state.selected_slot != PlayerState.SLOT_SHOVEL:
 		return
 	if _dig_cooldown <= 0.0:
 		_try_dig()
@@ -219,51 +224,34 @@ func _on_loot_claimed(item: Dictionary) -> void:
 
 
 ## Picks a hotbar slot by its index (0 = shovel, 1 = detector, 2+ = bag slots).
+## Empty bag slots are valid choices and mean genuinely empty hands; pressing the
+## already-selected bag slot again stows its item and leaves the hand empty.
 func _select_hotbar(index: int) -> void:
 	if _state == null or _player_body == null:
 		return
 	if index < 0 or index >= PlayerState.SLOT_COUNT:
 		return
-	if index == PlayerState.SLOT_SHOVEL:
-		_hold_tool(FirstPersonPlayer.TOOL_SHOVEL)
+	if index == PlayerState.SLOT_DETECTOR and not _state.has_detector:
+		Sfx.play_ui("denied", 0.04, -8.0)
+		_flash_hud("No detector yet - buy one at the market ($%d)"
+			% int(PlayerState.DETECTOR_PRICE))
 		return
+	_state.select_slot(index)
 	if index == PlayerState.SLOT_DETECTOR:
-		if not _state.has_detector:
-			Sfx.play_ui("denied", 0.04, -8.0)
-			_flash_hud("No detector yet - buy one at the market ($%d)"
-				% int(PlayerState.DETECTOR_PRICE))
-			return
-		_hold_tool(FirstPersonPlayer.TOOL_DETECTOR)
-		return
-	_select_slot(PlayerState.bag_index_of(index))
+		_player_body.set_tool_mode(FirstPersonPlayer.TOOL_DETECTOR)
+	elif index == PlayerState.SLOT_SHOVEL:
+		_player_body.set_tool_mode(FirstPersonPlayer.TOOL_SHOVEL)
 
 
-## Puts a tool in hand, putting away whatever item was being held.
-func _hold_tool(mode: int) -> void:
-	if _state.held_slot >= 0:
-		_state.set_held_slot(-1)
-	_player_body.set_tool_mode(mode)
-
-
-## Puts the item in bag slot `index` in hand (pressing it again puts it away).
-func _select_slot(index: int) -> void:
-	if _state == null:
-		return
-	if index < 0 or index >= _state.bag_slots.size() or _state.bag_slots[index].is_empty():
-		_flash_hud("Slot %d is empty" % PlayerState.hotbar_number(index + PlayerState.FIRST_BAG_SLOT))
-		return
-	_state.set_held_slot(index)
-
-
-## The hotbar slot in hand right now.
+## The hotbar slot the player is on right now.
 func _current_hotbar() -> int:
-	if _state == null or _player_body == null:
+	if _state == null:
 		return PlayerState.SLOT_SHOVEL
-	return PlayerState.hotbar_index(_state.held_slot,
-		_player_body.tool_mode == FirstPersonPlayer.TOOL_DETECTOR)
+	return _state.selected_slot
 
 
-## True when a hotbar slot can actually be selected.
+## True when the mouse wheel should stop on this slot. Empty bag slots are
+## skipped so scrolling stays useful, but the number keys can still pick them.
 func _hotbar_slot_usable(index: int) -> bool:
 	if _state == null:
 		return false
@@ -306,11 +294,14 @@ func _switch_tool() -> void:
 	if not _state.has_detector:
 		_flash_hud("No detector yet - buy one at the market ($%d)" % int(PlayerState.DETECTOR_PRICE))
 		return
-	# Swapping tools puts the item in hand away first.
-	if _state.held_slot >= 0:
-		_state.set_held_slot(-1)
-	_player_body.toggle_tool()
-	_flash_hud("Holding: %s" % ("Metal Detector" if _player_body.tool_mode == FirstPersonPlayer.TOOL_DETECTOR else "Shovel"))
+	var next := FirstPersonPlayer.TOOL_SHOVEL
+	if _player_body.tool_mode == FirstPersonPlayer.TOOL_SHOVEL:
+		next = FirstPersonPlayer.TOOL_DETECTOR
+	# Swapping tools also puts a held item away: the hand lands on the tool slot.
+	_player_body.set_tool_mode(next)
+	_state.select_slot(PlayerState.SLOT_DETECTOR if next == FirstPersonPlayer.TOOL_DETECTOR
+		else PlayerState.SLOT_SHOVEL)
+	_flash_hud("Holding: %s" % ("Metal Detector" if next == FirstPersonPlayer.TOOL_DETECTOR else "Shovel"))
 
 
 func _use_detector() -> void:
@@ -331,11 +322,15 @@ func _update_tool_status() -> void:
 		return
 	var held := _state.held_item()
 	if not held.is_empty():
-		_hud.set_detector_status("In hand: %s  ($%d)  -  press %d to put away" % [
+		_hud.set_detector_status("In hand: %s  ($%d)  -  press %d again to put away" % [
 			str(held.get("name", "item")), int(held.get("value", 0)),
-			PlayerState.hotbar_number(_state.held_slot + PlayerState.FIRST_BAG_SLOT)])
+			PlayerState.hotbar_number(_state.selected_slot)])
 		return
-	if _player_body.tool_mode == FirstPersonPlayer.TOOL_DETECTOR:
+	if _state.is_hand_empty():
+		_hud.set_detector_status("Empty hands  -  slot %d  -  1-9 or scroll for a tool" % [
+			PlayerState.hotbar_number(_state.selected_slot)])
+		return
+	if _state.selected_slot == PlayerState.SLOT_DETECTOR:
 		if _detector_cooldown > 0.0:
 			_hud.set_detector_status("Detector: %.0f s" % ceilf(_detector_cooldown))
 		else:

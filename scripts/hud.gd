@@ -275,26 +275,30 @@ func _refresh_inventory() -> void:
 		var slot: Dictionary = _player.bag_slots[i] if i < _player.bag_slots.size() else {}
 		var filled := not slot.is_empty()
 		var number := PlayerState.hotbar_number(i + PlayerState.FIRST_BAG_SLOT)
+		# The cursor can sit on an empty slot (empty hands) or on a filled one
+		# whose item was just sold or stowed, so the gold border follows the
+		# selection while the gold fill only marks an item actually in hand.
+		var is_selected := i + PlayerState.FIRST_BAG_SLOT == _player.selected_slot
 		var held := filled and i == _player.held_slot
 		if filled:
 			label.text = "%d  %s\n$%d" % [
 				number, str(slot.get("name", "?")), int(slot.get("value", 0))]
 			label.add_theme_color_override("font_color",
-				GOLD if held else Color(1, 1, 1, 0.85))
+				GOLD if is_selected else Color(1, 1, 1, 0.85))
 		else:
 			label.text = "%d\n-" % number
-			label.add_theme_color_override("font_color", Color(1, 1, 1, 0.3))
+			label.add_theme_color_override("font_color",
+				Color(1, 1, 1, 0.55) if is_selected else Color(1, 1, 1, 0.3))
 		if style != null:
 			style.bg_color = Color(0.34, 0.27, 0.1, 0.8) if held else Color(0.05, 0.06, 0.08, 0.55)
-			style.border_color = GOLD if held else Color(1, 1, 1, 0.18)
+			style.border_color = GOLD if is_selected else Color(1, 1, 1, 0.18)
 
 
-## Hotbar slot in hand, matching DigController: a held item, else the tool.
+## Hotbar slot the player is on, straight from PlayerState (it owns the cursor).
 func _current_hotbar() -> int:
 	if _player == null:
 		return PlayerState.SLOT_SHOVEL
-	var detector := _player_node != null and _player_node.tool_mode == FirstPersonPlayer.TOOL_DETECTOR
-	return PlayerState.hotbar_index(_player.held_slot, detector)
+	return _player.selected_slot
 
 
 func _set_tool_panel(index: int, header: String, value: String, owned: bool,
