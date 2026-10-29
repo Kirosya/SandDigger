@@ -1,3 +1,11 @@
 # Godot 4+ specific ignores
 .godot/
 /android/
+
+# Generated proof screenshots and run logs (see tests/*_shot.gd)
+/*.png
+/*.png.import
+/*_log.txt
+/godot_error.txt
+/godot_output.txt
+/prompt.txt

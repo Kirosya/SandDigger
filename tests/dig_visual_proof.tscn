@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://tests/dig_visual_proof.gd" id="1_proof"]
+
+[node name="DigVisualProof" type="Node3D"]
+script = ExtResource("1_proof")
