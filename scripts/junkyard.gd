@@ -1,9 +1,10 @@
 class_name Junkyard
 extends Node3D
-## The junkyard stall where claimed trash/scrap is sold for money.
+## The junkyard stall where the item in hand is sold for money.
 ##
 ## It only owns its look and a trading radius; the actual sale goes through
-## PlayerState.sell_all() so each player's money stays independent.
+## PlayerState.sell_held() so each player's money stays independent and only
+## the one item being held leaves the bag.
 
 const SELL_RADIUS := 3.5
 
@@ -43,7 +44,7 @@ func _build() -> void:
 
 	# Sign.
 	var sign_label := Label3D.new()
-	sign_label.text = "JUNKYARD\n[E] sell all"
+	sign_label.text = "JUNKYARD\n[E] sell held"
 	sign_label.font_size = 48
 	sign_label.pixel_size = 0.003
 	sign_label.billboard = BaseMaterial3D.BILLBOARD_ENABLED

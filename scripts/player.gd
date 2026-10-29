@@ -5,6 +5,10 @@ extends CharacterBody3D
 ## Mouse look on the body (yaw) and head (pitch), WASD movement, sprint, jump.
 ## The arrow keys also turn the camera, so the game is playable without a mouse.
 ## Digging itself lives in DigController so this script stays movement-only.
+##
+## This script also owns the hand: the shovel, the metal detector and any loot
+## item held for selling are swapped in and out of the first-person view here.
+## Holding R pulls the camera back to a third-person view of the character.
 
 @export var walk_speed := 4.0
 @export var sprint_speed := 6.8
@@ -20,11 +24,30 @@ const TOOL_BASE_POSITION := Vector3(0.26, -0.25, -0.46)
 ## Local z of the handle end nearest the camera (the "hand" end).
 const TOOL_HANDLE_NEAR_Z := 0.27
 
+## Render layer for everything that only the first-person camera may see: the
+## viewmodel hands, the tools and the item held for selling. The third-person
+## camera skips this layer, so no floating arms hang in the air behind the body.
+const VIEWMODEL_LAYER := 4
+
+const TOOL_SHOVEL := 0
+const TOOL_DETECTOR := 1
+
 @onready var head: Node3D = $Head
 @onready var camera: Camera3D = $Head/Camera3D
 @onready var spoon_pivot: Node3D = $Head/Camera3D/SpoonPivot
+@onready var detector_pivot: Node3D = $Head/Camera3D/DetectorPivot
+@onready var item_pivot: Node3D = $Head/Camera3D/ItemPivot
+@onready var third_camera: Camera3D = $ThirdPersonCamera
+@onready var rig: CharacterRig = $Body
+
+## Which tool is in hand. DigController flips this with Q.
+var tool_mode: int = TOOL_SHOVEL
 
 var _gravity: float = float(ProjectSettings.get_setting("physics/3d/default_gravity", 9.8))
+var _third_person := false
+var _held_item: Dictionary = {}
+var _item_visual: MeshInstance3D
+var _item_visual_id := -1
 
 
 func _ready() -> void:
@@ -32,11 +55,20 @@ func _ready() -> void:
 	global_position = spawn_point
 	mouse_sensitivity = GameSettings.mouse_sensitivity
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	_set_layers_recursive(spoon_pivot, VIEWMODEL_LAYER)
+	_set_layers_recursive(detector_pivot, VIEWMODEL_LAYER)
+	_set_layers_recursive(item_pivot, VIEWMODEL_LAYER)
+	detector_pivot.visible = false
+	item_pivot.visible = false
+	if third_camera != null:
+		third_camera.current = false
 
 	var state := get_node_or_null("PlayerState") as PlayerState
 	if state != null:
 		state.equipment_changed.connect(apply_equipment)
+		state.inventory_changed.connect(_on_inventory_changed)
 		apply_equipment(state.get_current_equipment())
+	_update_hand_visuals()
 
 
 ## Grows the held tool with the tier. The hand end of the handle stays put and
@@ -58,6 +90,75 @@ func apply_equipment(equipment: EquipmentData) -> void:
 		.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 	tween.tween_property(spoon_pivot, "position", target_position, 0.3) \
 		.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+
+
+## Swaps which tool the first-person hand holds.
+func set_tool_mode(mode: int) -> void:
+	tool_mode = TOOL_DETECTOR if mode == TOOL_DETECTOR else TOOL_SHOVEL
+	_update_hand_visuals()
+
+
+func toggle_tool() -> void:
+	set_tool_mode(TOOL_DETECTOR if tool_mode == TOOL_SHOVEL else TOOL_SHOVEL)
+
+
+func is_holding_loot() -> bool:
+	return not _held_item.is_empty()
+
+
+func _on_inventory_changed(slots: Array[Dictionary], held_slot: int) -> void:
+	if held_slot >= 0 and held_slot < slots.size():
+		_held_item = slots[held_slot]
+	else:
+		_held_item = {}
+	_update_hand_visuals()
+
+
+## Only one thing is ever visible in the hand: the held loot, else the detector,
+## else the shovel. The viewmodel hands follow whatever is held.
+func _update_hand_visuals() -> void:
+	if spoon_pivot == null:
+		return
+	var holding := not _held_item.is_empty()
+	spoon_pivot.visible = not holding and tool_mode == TOOL_SHOVEL
+	detector_pivot.visible = not holding and tool_mode == TOOL_DETECTOR
+	item_pivot.visible = holding
+	if holding:
+		_build_item_visual()
+		rig.set_tool_pivot(item_pivot, 0.0, 0.07)
+	elif tool_mode == TOOL_DETECTOR:
+		rig.set_tool_pivot(detector_pivot, 0.02, 0.09)
+	else:
+		rig.set_tool_pivot(spoon_pivot, CharacterRig.RIGHT_GRIP_Z, CharacterRig.LEFT_GRIP_Z)
+
+
+## Rebuilds the little junk model in the hand only when the held item changes.
+func _build_item_visual() -> void:
+	var item_id := int(_held_item.get("id", -1))
+	if item_id == _item_visual_id and _item_visual != null:
+		return
+	_item_visual_id = item_id
+	if _item_visual != null:
+		_item_visual.queue_free()
+		_item_visual = null
+	var loot := get_tree().get_first_node_in_group("loot_manager") as LootManager
+	if loot == null:
+		return
+	_item_visual = loot.make_piece_for(_held_item)
+	_item_visual.name = "HeldItem"
+	_item_visual.scale = Vector3(0.5, 0.5, 0.5)
+	_item_visual.rotation_degrees = Vector3(-12.0, 24.0, 8.0)
+	item_pivot.add_child(_item_visual)
+	_set_layers_recursive(_item_visual, VIEWMODEL_LAYER)
+
+
+func _set_layers_recursive(node: Node, layer: int) -> void:
+	if node == null:
+		return
+	for child in node.get_children():
+		if child is MeshInstance3D:
+			(child as MeshInstance3D).layers = layer
+		_set_layers_recursive(child, layer)
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -84,6 +185,14 @@ func _process(delta: float) -> void:
 		head.rotation.x = clampf(
 			head.rotation.x + tilt * arrow_look_speed * delta,
 			deg_to_rad(-89.0), deg_to_rad(89.0))
+
+	# Hold R to step outside the body and look at the character.
+	var want_third := Input.is_action_pressed("third_person")
+	if want_third != _third_person:
+		_third_person = want_third
+		if third_camera != null:
+			third_camera.current = _third_person
+			camera.current = not _third_person
 
 
 func _physics_process(delta: float) -> void:
@@ -117,7 +226,7 @@ func respawn() -> void:
 
 ## Small spoon swing so digging has tactile feedback.
 func play_dig_swing() -> void:
-	if spoon_pivot == null:
+	if spoon_pivot == null or not spoon_pivot.visible:
 		return
 	spoon_pivot.rotation = Vector3.ZERO
 	var tween := create_tween()

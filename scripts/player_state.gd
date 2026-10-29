@@ -3,18 +3,27 @@ extends Node
 ## Per-player progression state.
 ##
 ## One instance exists per player (1..4). Everything here is local to that
-## player: XP, level, money and equipment tier are never shared. The host owns
-## the authoritative instance for each player_id and will replicate the
-## relevant fields to that peer in Phase 3; nothing in this script assumes a
-## single global player.
+## player: XP, level, money, equipment tier, owned tools and the inventory are
+## never shared. The host owns the authoritative instance for each player_id and
+## will replicate the relevant fields to that peer in Phase 3; nothing in this
+## script assumes a single global player.
 
 signal xp_changed(current_xp: float, current_level: int)
 signal money_changed(current_money: float)
 signal equipment_changed(equipment: EquipmentData)
 signal carried_changed(carried_count: int, carried_value: float)
+## Emitted whenever the bag or the held slot changes, so the HUD can redraw.
+signal inventory_changed(slots: Array[Dictionary], held_slot: int)
+signal detector_changed(has_detector: bool)
 
 ## XP awarded per cubic metre of removed sand. Tunable balance knob.
 const XP_PER_CUBIC_METER := 150.0
+
+## The bag holds exactly this many loot items. Nothing stacks.
+const INVENTORY_SLOTS := 7
+
+## What the market charges for the metal detector.
+const DETECTOR_PRICE := 35.0
 
 ## Unique id assigned by the host when the player joins. 0 = offline/prototype.
 @export var player_id: int = 0
@@ -23,10 +32,12 @@ const XP_PER_CUBIC_METER := 150.0
 var current_xp: float = 0.0
 ## Level derived from current_xp; 1 = starting level.
 var current_level: int = 1
-## Money earned by selling trash/scrap. Unused in Phase 2.
+## Money earned by selling trash/scrap at the junkyard.
 var current_money: float = 0.0
 ## Index into `tiers`. Every player starts with the Teaspoon.
 var equipment_tier_index: int = 0
+## True once the metal detector has been bought at the market.
+var has_detector: bool = false
 
 ## Ordered equipment chain for THIS player.
 var tiers: Array[EquipmentData] = []
@@ -34,6 +45,9 @@ var tiers: Array[EquipmentData] = []
 ## Loot this player has claimed but not yet sold. Each entry is a Dictionary:
 ## { id: int, name: String, kind: String, value: float }.
 var carried_loot: Array[Dictionary] = []
+
+## Which bag slot is held in hand. -1 means empty-handed (the tool is in hand).
+var held_slot: int = -1
 
 
 func _ready() -> void:
@@ -105,10 +119,52 @@ func get_current_equipment() -> EquipmentData:
 	return tiers[equipment_tier_index]
 
 
-## Puts a claimed loot item in this player's bag.
-func add_loot(item: Dictionary) -> void:
+## --- Inventory ---------------------------------------------------------
+
+func is_inventory_full() -> bool:
+	return carried_loot.size() >= INVENTORY_SLOTS
+
+
+## Puts a claimed loot item in the bag. Returns false when the bag is full.
+func add_loot(item: Dictionary) -> bool:
+	if is_inventory_full():
+		return false
 	carried_loot.append(item)
-	carried_changed.emit(carried_loot.size(), carried_value())
+	_emit_inventory()
+	return true
+
+
+## The item currently held in hand, or {} when empty-handed.
+func held_item() -> Dictionary:
+	if held_slot < 0 or held_slot >= carried_loot.size():
+		return {}
+	return carried_loot[held_slot]
+
+
+## Puts bag slot `index` in hand. Pressing the same slot again puts it away.
+func set_held_slot(index: int) -> void:
+	if index < 0 or index >= carried_loot.size():
+		if held_slot != -1:
+			held_slot = -1
+			_emit_inventory()
+		return
+	held_slot = -1 if held_slot == index else index
+	_emit_inventory()
+
+
+## Sells ONLY the item in hand. Returns the sold item, or {} when empty-handed.
+func sell_held() -> Dictionary:
+	var item := held_item()
+	if item.is_empty():
+		return {}
+	carried_loot.remove_at(held_slot)
+	if carried_loot.is_empty():
+		held_slot = -1
+	else:
+		held_slot = mini(held_slot, carried_loot.size() - 1)
+	add_money(float(item.get("value", 0.0)))
+	_emit_inventory()
+	return item
 
 
 ## Total junkyard value of everything currently carried.
@@ -119,15 +175,21 @@ func carried_value() -> float:
 	return total
 
 
-## Sells everything carried. Returns the money earned (0 when empty).
-func sell_all() -> float:
-	var earned := carried_value()
-	if carried_loot.is_empty():
-		return 0.0
-	carried_loot.clear()
-	add_money(earned)
-	carried_changed.emit(0, 0.0)
-	return earned
+func _emit_inventory() -> void:
+	carried_changed.emit(carried_loot.size(), carried_value())
+	inventory_changed.emit(carried_loot, held_slot)
+
+
+## --- Tools / upgrades --------------------------------------------------
+
+## Buys the metal detector from the market.
+func buy_detector() -> bool:
+	if has_detector or current_money < DETECTOR_PRICE:
+		return false
+	add_money(-DETECTOR_PRICE)
+	has_detector = true
+	detector_changed.emit(true)
+	return true
 
 
 ## Next tier this player could buy, or -1 when already maxed.
@@ -140,11 +202,18 @@ func next_tier_index() -> int:
 
 ## Spends the tier's money cost and equips it. Requires BOTH thresholds.
 func try_upgrade() -> bool:
-	var next_index := next_tier_index()
-	if next_index < 0 or not can_upgrade_to(next_index):
+	return buy_tier(equipment_tier_index + 1)
+
+
+## Buys one specific tier from the market. Upgrades are sequential, so only the
+## next tier in the chain can be bought.
+func buy_tier(tier_index: int) -> bool:
+	if tier_index != equipment_tier_index + 1:
 		return false
-	var cost := tiers[next_index].money_required
-	equipment_tier_index = next_index
+	if not can_upgrade_to(tier_index):
+		return false
+	var cost := tiers[tier_index].money_required
+	equipment_tier_index = tier_index
 	if cost > 0.0:
 		add_money(-cost)
 	equipment_changed.emit(get_current_equipment())

@@ -17,6 +17,10 @@ func _ready() -> void:
 func _unhandled_input(event: InputEvent) -> void:
 	if not event.is_action_pressed("ui_cancel"):
 		return
+	# The market panel owns Esc while it is open.
+	var shop := get_tree().get_first_node_in_group("shop_ui") as ShopUI
+	if shop != null and shop.is_open():
+		return
 	if _root.visible:
 		_resume()
 	else:

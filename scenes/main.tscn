@@ -7,6 +7,8 @@
 [ext_resource type="Script" uid="uid://6e8u60ept0k1" path="res://scripts/junkyard.gd" id="5_junkyard"]
 [ext_resource type="Script" uid="uid://bf3m00duyegop" path="res://scripts/hud.gd" id="6_hud"]
 [ext_resource type="PackedScene" path="res://scenes/pause_menu.tscn" id="7_pause"]
+[ext_resource type="Script" path="res://scripts/market.gd" id="8_market"]
+[ext_resource type="Script" path="res://scripts/shop_ui.gd" id="9_shop"]
 
 [sub_resource type="ProceduralSkyMaterial" id="SkyMaterial_sand"]
 sky_top_color = Color(0.28, 0.52, 0.85, 1)
@@ -54,7 +56,14 @@ script = ExtResource("4_loot")
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 2.6, 0, 0.5)
 script = ExtResource("5_junkyard")
 
+[node name="Market" type="Node3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -4.6, 0, 0.5)
+script = ExtResource("8_market")
+
 [node name="HUD" type="CanvasLayer" parent="." unique_id=1841475020]
 script = ExtResource("6_hud")
+
+[node name="ShopUI" type="CanvasLayer" parent="."]
+script = ExtResource("9_shop")
 
 [node name="PauseMenu" parent="." instance=ExtResource("7_pause")]

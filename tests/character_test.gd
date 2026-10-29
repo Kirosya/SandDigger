@@ -48,7 +48,7 @@ func _ready() -> void:
 	_check("right hand has fingers", right.get_node_or_null("Finger0") != null)
 	_check("right hand has a sleeve", right.get_node_or_null("Sleeve") != null)
 	_check("hands render for the owner",
-		(right.get_node("Hand") as MeshInstance3D).layers == 1)
+		(right.get_node("Hand") as MeshInstance3D).layers == CharacterRig.VIEWMODEL_LAYER)
 
 	var pivot := player.get_node("Head/Camera3D/SpoonPivot") as Node3D
 	var tiers := EquipmentData.default_tiers()

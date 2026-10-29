@@ -78,14 +78,16 @@ func _ready() -> void:
 	_check("revealed once the sand reached it", item.revealed)
 	_check("revealed at its burial depth", reveal_surface <= -item.depth + 0.001)
 	_check("still visible after reveal", item.node.visible)
-	_expect("rests on the new sand surface", item.node.position.y, reveal_surface + 0.02, 0.001)
+	_expect("rests on the new sand surface", item.node.position.y,
+		minf(-item.depth, reveal_surface + 0.02), 0.001)
 
 	# Digging further must keep it on the sand, not leave it hanging in the air.
 	var before := item.node.position.y
 	terrain.dig_at(item.buried_position, 0.4, 0.08)
 	var after_surface := terrain.get_height_at(item.buried_position)
 	_check("follows the sand down", item.node.position.y < before)
-	_expect("still rests on the sand", item.node.position.y, after_surface + 0.02, 0.001)
+	_expect("still rests on the sand", item.node.position.y,
+		minf(-item.depth, after_surface + 0.02), 0.001)
 
 	_finish()
 

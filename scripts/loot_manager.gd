@@ -108,10 +108,13 @@ func take_loot(loot_id: int, player_id: int) -> bool:
 		return false
 	if item.owner_id != 0:
 		return false
-	item.owner_id = player_id
-	item.claimed = true
 	if _player == null:
 		_player = get_tree().get_first_node_in_group("player_state") as PlayerState
+	# A full bag must not claim the item: it has to stay in the world for later.
+	if _player != null and _player.is_inventory_full():
+		return false
+	item.owner_id = player_id
+	item.claimed = true
 	if _player != null:
 		_player.add_loot({
 			"id": item.loot_id,
@@ -316,6 +319,16 @@ func _make_visual(item: LootItem) -> Node3D:
 	root.add_child(_make_piece(item))
 	_root.add_child(root)
 	return root
+
+
+## Builds a small visual for an inventory item, so the hand can show exactly the
+## can/boot/scrap that is about to be sold.
+func make_piece_for(item_data: Dictionary) -> MeshInstance3D:
+	var temp := LootItem.new()
+	temp.loot_id = int(item_data.get("id", 0))
+	temp.display_name = str(item_data.get("name", "Scrap"))
+	temp.kind = str(item_data.get("kind", "trash"))
+	return _make_piece(temp)
 
 
 ## Builds a recognisable bit of beach junk instead of a generic box.

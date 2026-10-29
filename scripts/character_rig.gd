@@ -30,10 +30,15 @@ const LEFT_ARM_TILT := Vector3(-6.0, 0.0, -18.0)
 ## Render layer used for parts the owner's own camera must not see (head, hat,
 ## body arms). Other cameras, i.e. remote players, still render them.
 const OWNER_HIDDEN_LAYER := 2
+## Render layer for the first-person hands. Only the owner's camera renders it;
+## the third-person camera skips it so the arms do not float behind the body.
+const VIEWMODEL_LAYER := 4
 
 var _pivot: Node3D
 var _right_arm: Node3D
 var _left_arm: Node3D
+var _right_grip_z := RIGHT_GRIP_Z
+var _left_grip_z := LEFT_GRIP_Z
 var _materials: Dictionary = {}
 
 
@@ -55,6 +60,21 @@ func _ready() -> void:
 	camera.add_child(_right_arm)
 	_left_arm = _make_arm("LeftArm", false)
 	camera.add_child(_left_arm)
+	# Viewmodel hands are first-person only; the third-person camera skips them.
+	_set_layer_recursive(_right_arm, VIEWMODEL_LAYER)
+	_set_layer_recursive(_left_arm, VIEWMODEL_LAYER)
+	_place_arms()
+
+
+## Points the hands at whatever is in hand (shovel, detector or held loot) and
+## at the grip points on that model.
+func set_tool_pivot(pivot: Node3D, right_grip_z: float = RIGHT_GRIP_Z,
+		left_grip_z: float = LEFT_GRIP_Z) -> void:
+	if pivot == null:
+		return
+	_pivot = pivot
+	_right_grip_z = right_grip_z
+	_left_grip_z = left_grip_z
 	_place_arms()
 
 
@@ -69,8 +89,8 @@ func _place_arms() -> void:
 	if _pivot == null:
 		return
 	var basis := _pivot.basis.orthonormalized()
-	_place_arm(_right_arm, basis, RIGHT_GRIP_Z, RIGHT_ARM_TILT)
-	_place_arm(_left_arm, basis, LEFT_GRIP_Z, LEFT_ARM_TILT)
+	_place_arm(_right_arm, basis, _right_grip_z, RIGHT_ARM_TILT)
+	_place_arm(_left_arm, basis, _left_grip_z, LEFT_ARM_TILT)
 
 
 func _place_arm(arm: Node3D, pivot_basis: Basis, grip_z: float, tilt_degrees: Vector3) -> void:
@@ -101,8 +121,14 @@ func _build_body() -> void:
 	add_child(head_group)
 	_add("Neck", _cylinder(0.05, 0.055, 0.1), "skin", Vector3(0.0, 1.42, 0.0), head_group)
 	_add("Head", _sphere(0.115), "skin", Vector3(0.0, 1.56, 0.0), head_group)
-	_add("HatBrim", _cylinder(0.24, 0.24, 0.02), "straw", Vector3(0.0, 1.65, 0.0), head_group)
-	_add("HatCrown", _cylinder(0.1, 0.12, 0.1), "straw", Vector3(0.0, 1.71, 0.0), head_group)
+	var brim := _add("HatBrim", _cylinder(0.24, 0.24, 0.02), "straw",
+		Vector3(0.0, 1.65, 0.0), head_group)
+	var crown := _add("HatCrown", _cylinder(0.1, 0.12, 0.1), "straw",
+		Vector3(0.0, 1.71, 0.0), head_group)
+	# The brim would otherwise throw the whole head into shadow and make the
+	# character look headless from behind.
+	brim.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	crown.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 
 	# Body arms: replaced by the viewmodel hands for the local player.
 	var arms_group := Node3D.new()

@@ -1,9 +1,10 @@
-[gd_scene load_steps=10 format=3]
+[gd_scene load_steps=11 format=3]
 
 [ext_resource type="Script" path="res://scripts/player.gd" id="1_player"]
 [ext_resource type="Script" path="res://scripts/player_state.gd" id="2_state"]
 [ext_resource type="Script" path="res://scripts/dig_controller.gd" id="3_dig"]
 [ext_resource type="Script" path="res://scripts/character_rig.gd" id="4_rig"]
+[ext_resource type="Script" path="res://scripts/detector_model.gd" id="5_detector"]
 
 [sub_resource type="CapsuleShape3D" id="CapsuleShape3D_player"]
 radius = 0.35
@@ -41,6 +42,7 @@ script = ExtResource("4_rig")
 fov = 75.0
 near = 0.05
 current = true
+cull_mask = 1048573
 
 [node name="SpoonPivot" type="Node3D" parent="Head/Camera3D"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.26, -0.25, -0.46)
@@ -49,11 +51,31 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.26, -0.25, -0.46)
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0.12)
 mesh = SubResource("BoxMesh_handle")
 material_override = SubResource("StandardMaterial3D_spoon")
+layers = 4
 
 [node name="Bowl" type="MeshInstance3D" parent="Head/Camera3D/SpoonPivot"]
 transform = Transform3D(1, 0, 0, 0, 0.35, 0, 0, 0, 1.25, 0, 0, -0.06)
 mesh = SubResource("SphereMesh_bowl")
 material_override = SubResource("StandardMaterial3D_spoon")
+layers = 4
+
+[node name="DetectorPivot" type="Node3D" parent="Head/Camera3D"]
+position = Vector3(0.18, -0.24, -0.5)
+rotation_degrees = Vector3(-18, -8, 0)
+visible = false
+script = ExtResource("5_detector")
+
+[node name="ItemPivot" type="Node3D" parent="Head/Camera3D"]
+position = Vector3(0.22, -0.26, -0.55)
+visible = false
+
+[node name="ThirdPersonCamera" type="Camera3D" parent="."]
+position = Vector3(0, 2, 3.9)
+rotation_degrees = Vector3(-12, 0, 0)
+fov = 70.0
+near = 0.05
+current = false
+cull_mask = 1048571
 
 [node name="PlayerState" type="Node" parent="."]
 script = ExtResource("2_state")

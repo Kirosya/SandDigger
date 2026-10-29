@@ -30,6 +30,10 @@ var _status_text := ""
 var _banner: Label
 var _banner_tween: Tween
 
+## Seven-slot bag bar along the bottom of the screen.
+var _slot_panels: Array[Panel] = []
+var _slot_labels: Array[Label] = []
+
 ## Screen-edge wash that pulses with the detector beeps.
 var _edge: TextureRect
 var _edge_tween: Tween
@@ -109,14 +113,15 @@ func _build() -> void:
 	root.add_child(_banner)
 
 	_build_detector_audio()
+	_build_inventory_bar(root)
 
-	var hint := _make_label(16, Color(1, 1, 1, 0.55))
+	var hint := _make_label(15, Color(1, 1, 1, 0.55))
 	hint.name = "Hint"
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	hint.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
-	hint.position += Vector2(-320, -32)
-	hint.size = Vector2(640, 24)
-	hint.text = "Click: dig   E: pick up / sell   F: detector (15 s)   U: upgrade   Arrows: look   Esc: pause"
+	hint.position += Vector2(-460, -92)
+	hint.size = Vector2(920, 24)
+	hint.text = "Click: dig / detector   1-7: hold item   E: pick up / sell   Q: swap tool   R: third person   Esc: pause"
 	root.add_child(hint)
 
 
@@ -184,6 +189,64 @@ func _make_label(font_size: int, color: Color) -> Label:
 	return label
 
 
+## Seven bag slots in a row: number, item name and value. The slot in hand is
+## highlighted gold so "hold an item, then sell it" is obvious at a glance.
+func _build_inventory_bar(root: Control) -> void:
+	var bar := HBoxContainer.new()
+	bar.name = "Inventory"
+	bar.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	bar.position += Vector2(-458, -62)
+	bar.add_theme_constant_override("separation", 8)
+	bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.add_child(bar)
+
+	for i in PlayerState.INVENTORY_SLOTS:
+		var panel := Panel.new()
+		panel.custom_minimum_size = Vector2(124, 58)
+		panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var style := StyleBoxFlat.new()
+		style.bg_color = Color(0.05, 0.06, 0.08, 0.55)
+		style.border_color = Color(1, 1, 1, 0.18)
+		style.set_border_width_all(2)
+		style.set_corner_radius_all(6)
+		panel.add_theme_stylebox_override("panel", style)
+
+		var label := _make_label(11, Color(1, 1, 1, 0.35))
+		label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		label.clip_text = true
+		label.set_anchors_preset(Control.PRESET_FULL_RECT)
+		label.text = "%d\n-" % (i + 1)
+		panel.add_child(label)
+
+		bar.add_child(panel)
+		_slot_panels.append(panel)
+		_slot_labels.append(label)
+
+
+func _refresh_inventory() -> void:
+	if _player == null:
+		return
+	for i in _slot_panels.size():
+		var panel := _slot_panels[i]
+		var label := _slot_labels[i]
+		var style := panel.get_theme_stylebox("panel") as StyleBoxFlat
+		var filled := i < _player.carried_loot.size()
+		var held := i == _player.held_slot
+		if filled:
+			var item: Dictionary = _player.carried_loot[i]
+			label.text = "%d  %s\n$%d" % [
+				i + 1, str(item.get("name", "?")), int(item.get("value", 0))]
+			label.add_theme_color_override("font_color",
+				GOLD if held else Color(1, 1, 1, 0.85))
+		else:
+			label.text = "%d\n-" % (i + 1)
+			label.add_theme_color_override("font_color", Color(1, 1, 1, 0.3))
+		if style != null:
+			style.bg_color = Color(0.34, 0.27, 0.1, 0.8) if held else Color(0.05, 0.06, 0.08, 0.55)
+			style.border_color = GOLD if held else Color(1, 1, 1, 0.18)
+
+
 ## Full-screen radial wash that is transparent in the middle and solid at the
 ## edges, so a detector pulse reads as "the screen is glowing around me".
 func _build_edge_overlay(root: Control) -> void:
@@ -249,6 +312,7 @@ func _bind() -> void:
 		_player.money_changed.connect(_on_money_changed)
 		_player.equipment_changed.connect(_on_equipment_changed)
 		_player.carried_changed.connect(_on_carried_changed)
+		_player.inventory_changed.connect(_on_inventory_changed)
 	refresh()
 
 
@@ -276,17 +340,19 @@ func refresh() -> void:
 	var next_line := "MAX TIER"
 	if next_index >= 0:
 		var tier := _player.tiers[next_index]
-		next_line = "Next: %s  (Lv %d / $%d)" % [
+		next_line = "Next: %s  (Lv %d / $%d)  at the market" % [
 			tier.display_name, tier.level_required, int(tier.money_required)]
 	_stats.text = "\n".join([
 		"Lv %d   $%d   %s" % [_player.current_level, int(_player.current_money), equipment.display_name],
 		"XP %.0f / %d" % [_player.current_xp, int(xp_needed)],
 		next_line,
 	])
-	_pocket.text = "Pocket: %d item(s)  $%d  %s" % [
-		_player.carried_loot.size(), int(_player.carried_value()),
+	_pocket.text = "Bag %d/%d   $%d   %s" % [
+		_player.carried_loot.size(), PlayerState.INVENTORY_SLOTS,
+		int(_player.carried_value()),
 		"(sell at the junkyard)" if not _player.carried_loot.is_empty() else "",
 	]
+	_refresh_inventory()
 
 
 func show_prompt(text: String) -> void:
@@ -373,3 +439,7 @@ func _on_equipment_changed(_equipment: EquipmentData) -> void:
 
 func _on_carried_changed(_count: int, _value: float) -> void:
 	refresh()
+
+
+func _on_inventory_changed(_slots: Array[Dictionary], _held_slot: int) -> void:
+	_refresh_inventory()
