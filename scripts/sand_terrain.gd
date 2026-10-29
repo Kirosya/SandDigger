@@ -60,6 +60,10 @@ class Chunk:
 
 ## Height of every grid vertex in metres (0 = untouched surface).
 var heights := PackedFloat32Array()
+## The beach exactly as generated, before any digging. The sea reads its
+## waterline from this, so carving a hole can never drag the shoreline inland
+## (which would slide the water plane up over dry sand).
+var base_heights := PackedFloat32Array()
 ## World Z of the current waterline. Sea pushes it in as the tide moves, which
 ## tints the sand at and below it wet; the colour fades back to dry sand inland.
 var wet_line_z := SHORE_START_Z
@@ -88,6 +92,7 @@ func _ready() -> void:
 ## build: flat sand inland, a smooth slope down into the sea toward -Z.
 func _generate_beach() -> void:
 	var span := SHORE_START_Z - SHORE_END_Z
+	base_heights.resize(GRID_SIZE * GRID_SIZE)
 	for z in GRID_SIZE:
 		var world_z := (float(z) - HALF_GRID) * CELL_SIZE
 		var t := clampf((SHORE_START_Z - world_z) / span, 0.0, 1.0)
@@ -96,6 +101,7 @@ func _generate_beach() -> void:
 		var row := z * GRID_SIZE
 		for x in GRID_SIZE:
 			heights[row + x] = height
+			base_heights[row + x] = height
 
 
 ## Digs a smooth bowl into the sand at `world_pos`.
@@ -257,7 +263,18 @@ func _state_for(player_id: int) -> PlayerState:
 ## Height of the sand surface at `world_pos` (bilinear between grid points).
 ## Returns 0.0 outside the grid.
 func get_height_at(world_pos: Vector3) -> float:
-	if heights.is_empty():
+	return _sample_height(heights, world_pos)
+
+
+## Height of the beach before anything was dug (bilinear). The sea uses this so
+## the waterline is where the beach meets the water, not wherever the last hole
+## happened to be.
+func base_height_at(world_pos: Vector3) -> float:
+	return _sample_height(base_heights, world_pos)
+
+
+func _sample_height(source: PackedFloat32Array, world_pos: Vector3) -> float:
+	if source.is_empty():
 		return 0.0
 	var local_pos := to_local(world_pos)
 	var gx := local_pos.x / CELL_SIZE + HALF_GRID
@@ -270,10 +287,10 @@ func get_height_at(world_pos: Vector3) -> float:
 	var z1 := mini(z0 + 1, GRID_SIZE - 1)
 	var tx := gx - float(x0)
 	var tz := gz - float(z0)
-	var h00 := heights[z0 * GRID_SIZE + x0]
-	var h10 := heights[z0 * GRID_SIZE + x1]
-	var h01 := heights[z1 * GRID_SIZE + x0]
-	var h11 := heights[z1 * GRID_SIZE + x1]
+	var h00 := source[z0 * GRID_SIZE + x0]
+	var h10 := source[z0 * GRID_SIZE + x1]
+	var h01 := source[z1 * GRID_SIZE + x0]
+	var h11 := source[z1 * GRID_SIZE + x1]
 	return lerpf(lerpf(h00, h10, tx), lerpf(h01, h11, tx), tz)
 
 

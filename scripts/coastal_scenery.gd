@@ -90,48 +90,32 @@ func _ready() -> void:
 
 ## A gently rising, forest-coloured ground mesh beyond the sand. Without it the
 ## heightmap edge would be a hard cut against the sky on the inland sides.
+##
+## The sand's own footprint is left completely EMPTY. A ground plane under the
+## diggable sand would sit only 10 cm below it, so the moment a hole was carved
+## deeper than that the plane showed through as a flat, hard-edged patch at the
+## bottom of the hole -- it read as "the sand stops here" even though the
+## heightmap kept going down to MAX_DEPTH. Three patches are built around the
+## footprint instead, meeting the sand exactly at its edge.
 func _build_backdrop() -> void:
 	_backdrop = Node3D.new()
 	_backdrop.name = "Backdrop"
 	add_child(_backdrop)
 
 	var step := 4.0
-	var x_min := -120.0
-	var x_max := 120.0
-	var z_min := 0.0
-	var z_max := 120.0
-	var nx := int(round((x_max - x_min) / step)) + 1
-	var nz := int(round((z_max - z_min) / step)) + 1
-
 	var vertices := PackedVector3Array()
 	var normals := PackedVector3Array()
 	var colors := PackedColorArray()
 	var indices := PackedInt32Array()
-	vertices.resize(nx * nz)
-	normals.resize(nx * nz)
-	colors.resize(nx * nz)
 
-	for iz in nz:
-		var z := z_min + float(iz) * step
-		for ix in nx:
-			var x := x_min + float(ix) * step
-			var index := iz * nx + ix
-			vertices[index] = Vector3(x, _backdrop_height(x, z), z)
-			normals[index] = _backdrop_normal(x, z, step)
-			colors[index] = _backdrop_color(x, z)
-
-	for iz in nz - 1:
-		for ix in nx - 1:
-			var a := iz * nx + ix
-			var b := a + 1
-			var c := a + nx
-			var d := c + 1
-			indices.append(a)
-			indices.append(b)
-			indices.append(c)
-			indices.append(b)
-			indices.append(d)
-			indices.append(c)
+	# West of the sand, east of it, and behind it. Between them the heightmap
+	# owns the ground, so nothing is drawn under the beach.
+	_add_backdrop_patch(vertices, normals, colors, indices,
+		-120.0, -EDGE, 0.0, 120.0, step)
+	_add_backdrop_patch(vertices, normals, colors, indices,
+		EDGE, 120.0, 0.0, 120.0, step)
+	_add_backdrop_patch(vertices, normals, colors, indices,
+		-EDGE, EDGE, EDGE, 120.0, step)
 
 	var arrays := []
 	arrays.resize(Mesh.ARRAY_MAX)
@@ -155,11 +139,56 @@ func _build_backdrop() -> void:
 	_backdrop.add_child(instance)
 
 
+## Appends one rectangular piece of backdrop to the shared arrays. Both edges are
+## kept exactly on `from`/`to` so a patch can butt up against the sand heightmap
+## without a gap or an overhang.
+func _add_backdrop_patch(vertices: PackedVector3Array, normals: PackedVector3Array,
+		colors: PackedColorArray, indices: PackedInt32Array,
+		x_min: float, x_max: float, z_min: float, z_max: float, step: float) -> void:
+	var xs := _axis_values(x_min, x_max, step)
+	var zs := _axis_values(z_min, z_max, step)
+	var base := vertices.size()
+
+	for z in zs:
+		for x in xs:
+			vertices.append(Vector3(x, _backdrop_height(x, z), z))
+			normals.append(_backdrop_normal(x, z, step))
+			colors.append(_backdrop_color(x, z))
+
+	var nx := xs.size()
+	var nz := zs.size()
+	for iz in nz - 1:
+		for ix in nx - 1:
+			var a := base + iz * nx + ix
+			var b := a + 1
+			var c := a + nx
+			var d := c + 1
+			indices.append(a)
+			indices.append(b)
+			indices.append(c)
+			indices.append(b)
+			indices.append(d)
+			indices.append(c)
+
+
+## Evenly spaced samples from `from` to `to`, both ends included.
+func _axis_values(from: float, to: float, step: float) -> PackedFloat32Array:
+	var values := PackedFloat32Array()
+	var spans := maxi(1, int(ceil(absf(to - from) / step)))
+	var actual := (to - from) / float(spans)
+	for i in spans + 1:
+		values.append(from + actual * float(i))
+	return values
+
+
 func _backdrop_height(x: float, z: float) -> float:
 	var edge := maxf(maxf(absf(x) - EDGE, z - EDGE), 0.0)
 	var rise := smoothstep(0.0, 46.0, edge)
 	var wave := sin(x * 0.085) * cos(z * 0.10) * 0.55 + sin(x * 0.19 + z * 0.13) * 0.28
-	return -0.1 + rise * 3.6 + wave * rise * 1.1
+	# Just under the sand at the seam so the two meshes meet without z-fighting,
+	# then rising away from the beach. Never a plane under the beach itself:
+	# _build_backdrop leaves the sand footprint empty.
+	return -0.02 + rise * 3.6 + wave * rise * 1.1
 
 
 func _backdrop_normal(x: float, z: float, step: float) -> Vector3:

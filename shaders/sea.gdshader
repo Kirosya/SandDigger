@@ -14,6 +14,11 @@ uniform float foam_width = 2.2;
 uniform float wave_height = 0.03;
 // World Z of the waterline (more negative = further out to sea).
 uniform float shoreline_z = -13.0;
+// The plane is much wider than the wet part so the horizon is water, but it must
+// never be visible inland: on land it would be a sheet hovering just under the
+// sand, which a dug hole exposes as a flat white/turquoise slab. Everything this
+// far behind the waterline is simply not drawn.
+uniform float dry_margin = 0.35;
 // How many metres offshore the water reaches its deep colour. The seabed slopes
 // gently for ~22 m, so this keeps the shallows readable instead of snapping to
 // deep blue right at the waterline.
@@ -29,6 +34,11 @@ void vertex() {
 }
 
 void fragment() {
+	// Past the waterline there is beach, not sea.
+	if (world_pos.z > shoreline_z + dry_margin) {
+		discard;
+	}
+
 	// 0 at the waterline, 1 far out to sea (the sea is on the -Z side).
 	float offshore = clamp((shoreline_z - world_pos.z) / deep_distance, 0.0, 1.0);
 	float ripple = sin(world_pos.x * 1.7 + TIME * 2.0)

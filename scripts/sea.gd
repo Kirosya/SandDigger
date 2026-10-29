@@ -25,6 +25,10 @@ const TIDE_PERIOD := 60.0
 ## three edges are forest and windfall, never open water.
 const WATER_SIZE := 700.0
 const WATER_SPAN_Z := 460.0
+## How far behind the moving waterline the water plane stops being drawn. The
+## plane still spans the whole horizon, but on the beach side it is masked off so
+## a hole dug in the sand can never expose it as a flat sheet under the surface.
+const DRY_MARGIN := 0.35
 
 ## Current water height (world Y).
 var level := TIDE_LOW
@@ -74,11 +78,14 @@ func _update_shoreline() -> void:
 			return
 	# The beach is flat inland (height 0) and slopes down toward -Z, so the
 	# height is monotonic along Z and a binary search finds the waterline.
+	# This deliberately reads the UNDUG profile: a hole in the sand must not drag
+	# the waterline inland, or the water plane slides up over dry beach and shows
+	# through every pit as a flat white/turquoise slab.
 	var dry := 8.0
 	var deep := -32.0
 	for i in 22:
 		var mid := (dry + deep) * 0.5
-		if _terrain.get_height_at(Vector3(0.0, 0.0, mid)) > level:
+		if _terrain.base_height_at(Vector3(0.0, 0.0, mid)) > level:
 			# Dry here: the waterline is further out (more negative Z).
 			dry = mid
 		else:
@@ -124,5 +131,6 @@ func _build() -> void:
 	_material = ShaderMaterial.new()
 	_material.shader = load("res://shaders/sea.gdshader") as Shader
 	_material.set_shader_parameter("shoreline_z", shoreline_z)
+	_material.set_shader_parameter("dry_margin", DRY_MARGIN)
 	water.material_override = _material
 	add_child(water)

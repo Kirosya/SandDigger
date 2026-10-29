@@ -29,6 +29,25 @@ func _ready() -> void:
 	if ground != null:
 		_check("backdrop is a real mesh", ground.mesh != null and ground.mesh.get_surface_count() == 1)
 
+		# The regression that made digging feel broken: a ground plane sitting
+		# 10 cm under the sand. Any hole deeper than that showed it as a flat,
+		# hard-edged patch in the bottom of the pit. No backdrop vertex may stand
+		# over the sand heightmap's footprint.
+		var verts := ground.mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX] as PackedVector3Array
+		var inside := 0
+		var furthest := 0.0
+		for vertex in verts:
+			if absf(vertex.x) < CoastalScenery.EDGE - 0.001 \
+					and vertex.z < CoastalScenery.EDGE - 0.001:
+				inside += 1
+			furthest = maxf(furthest, maxf(absf(vertex.x), vertex.z))
+		print("COAST backdrop_vertices=%d inside_sand=%d furthest=%.1f" % [
+			verts.size(), inside, furthest])
+		_check("backdrop never covers the diggable sand", inside == 0)
+		_check("backdrop still closes the horizon", furthest > 90.0)
+		_check("backdrop meets the sand at its edge, not below it",
+			absf(scenery._backdrop_height(CoastalScenery.EDGE, 4.0)) < 0.05)
+
 	# --- Forest on +X -------------------------------------------------------
 	var forest := scenery.get_node_or_null("Forest")
 	_check("scenery has a forest", forest != null)

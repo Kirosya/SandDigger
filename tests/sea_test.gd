@@ -56,6 +56,18 @@ func _ready() -> void:
 		_check("water never reaches the inland half of the beach", inland_edge <= 0.5)
 		_check("water still reaches the horizon", plane.size.y >= 300.0)
 
+		# The plane spans the horizon, so it also lies under the inland sand. It
+		# must be masked off behind the waterline, otherwise a hole dug in the
+		# beach exposes it as a flat white/turquoise slab just under the surface.
+		var material := water.material_override as ShaderMaterial
+		_check("water is a shader", material != null)
+		if material != null:
+			var dry := float(material.get_shader_parameter("dry_margin"))
+			print("SEA dry_margin=%.2f" % dry)
+			_check("water is masked off inland", is_equal_approx(dry, Sea.DRY_MARGIN))
+			_check("the mask starts at the waterline, not metres out to sea",
+				dry > 0.0 and dry < 2.0)
+
 	# --- Tide ---------------------------------------------------------------
 	print("SEA tide level=%.3f rising=%s shoreline=%.2f" % [
 		sea.level, str(sea.rising), sea.shoreline_z])
@@ -73,6 +85,28 @@ func _ready() -> void:
 	_check("tide range is clearly visible", Sea.TIDE_HIGH - Sea.TIDE_LOW >= 0.9)
 	_check("wet sand band follows the waterline",
 		absf(terrain.wet_line_z - sea.shoreline_z) < 0.25)
+
+	# --- Digging must not move the sea --------------------------------------
+	# The waterline used to be read from the LIVE heightmap, so a hole dug at
+	# x = 0 dragged it inland and slid the water plane up over dry sand, where it
+	# showed through the pit as a flat white slab. The waterline is now derived
+	# from the undug beach profile.
+	var shore_before_dig := sea.shoreline_z
+	var wet_before_dig := terrain.wet_line_z
+	for i in 6:
+		terrain.host_dig(Vector3(0.0, terrain.get_height_at(Vector3(0.0, 0.0, -10.0)), -10.0), 1, 3)
+	sea._update_tide(0.0)
+	print("SEA after digging shoreline=%.2f (was %.2f) dug_height=%.2f" % [
+		sea.shoreline_z, shore_before_dig,
+		terrain.get_height_at(Vector3(0.0, 0.0, -10.0))])
+	_check("digging does not drag the waterline inland",
+		absf(sea.shoreline_z - shore_before_dig) < 0.05)
+	_check("digging does not move the wet-sand band", absf(terrain.wet_line_z - wet_before_dig) < 0.05)
+	_check("the dug sand really did go below the waterline",
+		terrain.get_height_at(Vector3(0.0, 0.0, -10.0)) < sea.level)
+	_check("the undug profile is untouched",
+		absf(terrain.base_height_at(Vector3(0.0, 0.0, -10.0))
+			- sea.level) < 0.35)
 
 	# --- The rising tide floats trash in on its own ------------------------
 	sea._time = Sea.TIDE_PERIOD * 0.25
