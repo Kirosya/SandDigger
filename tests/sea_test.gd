@@ -27,11 +27,34 @@ func _ready() -> void:
 	# --- Beach profile ------------------------------------------------------
 	var inland := terrain.get_height_at(Vector3(0.0, 0.0, 6.0))
 	var shore := terrain.get_height_at(Vector3(0.0, 0.0, SandTerrain.SHORE_START_Z))
-	var deep := terrain.get_height_at(Vector3(0.0, 0.0, SandTerrain.SHORE_END_Z - 2.0))
+	var deep := terrain.get_height_at(Vector3(0.0, 0.0, SandTerrain.SHORE_END_Z))
 	print("SEA heights inland=%.3f shore=%.3f deep=%.3f" % [inland, shore, deep])
 	_check("beach is flat at the spawn", absf(inland) < 0.01)
 	_check("shore starts at sand level", absf(shore) < 0.01)
 	_check("beach slopes under the sea", deep <= SandTerrain.SEA_FLOOR + 0.01)
+
+	# The underwater sand has to go down in one long, smooth ramp, not a step.
+	var previous := shore
+	var gradual := true
+	var sample_z := SandTerrain.SHORE_START_Z - 2.0
+	while sample_z > SandTerrain.SHORE_END_Z:
+		var h := terrain.get_height_at(Vector3(0.0, 0.0, sample_z))
+		if h > previous + 0.001 or previous - h > 0.7:
+			gradual = false
+		previous = h
+		sample_z -= 2.0
+	_check("seabed descends gradually", gradual)
+
+	# --- Water only on the -Z side -----------------------------------------
+	var water := sea.get_node_or_null("Water") as MeshInstance3D
+	_check("sea has a water surface", water != null)
+	if water != null:
+		var plane := water.mesh as PlaneMesh
+		var inland_edge := water.position.z + plane.size.y * 0.5
+		print("SEA water z=%.1f size_z=%.1f inland_edge=%.2f" % [
+			water.position.z, plane.size.y, inland_edge])
+		_check("water never reaches the inland half of the beach", inland_edge <= 0.5)
+		_check("water still reaches the horizon", plane.size.y >= 300.0)
 
 	# --- Tide ---------------------------------------------------------------
 	print("SEA tide level=%.3f rising=%s shoreline=%.2f" % [
@@ -47,6 +70,9 @@ func _ready() -> void:
 		sea.level, sea.shoreline_z])
 	_check("tide rises to high water", sea.level > level_before + 0.3)
 	_check("high tide pushes the waterline inland", sea.shoreline_z > shore_before + 0.5)
+	_check("tide range is clearly visible", Sea.TIDE_HIGH - Sea.TIDE_LOW >= 0.9)
+	_check("wet sand band follows the waterline",
+		absf(terrain.wet_line_z - sea.shoreline_z) < 0.25)
 
 	# --- The rising tide floats trash in on its own ------------------------
 	sea._time = Sea.TIDE_PERIOD * 0.25

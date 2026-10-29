@@ -24,14 +24,21 @@ const CHUNKS_PER_SIDE := 8
 
 const SAND_TOP_COLOR := Color(0.62, 0.5, 0.32)
 const SAND_DEEP_COLOR := Color(0.24, 0.17, 0.09)
+## Recently wetted sand reads darker and a little grey. Sea pushes the current
+## waterline in, so this is the band that visibly walks up and down the beach.
+const SAND_WET_COLOR := Color(0.30, 0.26, 0.18)
+## The sand fades into these at the inland edges: pine forest floor on +X and
+## leaf litter where the fallen-log barriers sit on -X and +Z.
+const FOREST_FLOOR_COLOR := Color(0.22, 0.30, 0.14)
+const LEAF_LITTER_COLOR := Color(0.40, 0.32, 0.18)
 
-## The beach slopes into the sea on the -Z side. Inland (Z > SHORE_START_Z) the
-## sand is flat at 0; past the start it drops smoothly to SEA_FLOOR by
-## SHORE_END_Z, which is what lets the water plane cover it and the tide walk the
-## waterline up and down the sand.
+## The beach slopes into the sea on the -Z side only. Inland (Z > SHORE_START_Z)
+## the sand is flat at 0; past the start it drops on a long, smooth curve to
+## SEA_FLOOR by SHORE_END_Z. The wide shallow slope is what makes the sea look
+## like it gradually gets deeper, and gives the tide room to move the waterline.
 const SHORE_START_Z := -8.0
-const SHORE_END_Z := -26.0
-const SEA_FLOOR := -2.2
+const SHORE_END_Z := -30.0
+const SEA_FLOOR := -2.8
 
 ## Emitted after a dig that changed the heightmap. Loot, VFX and (later) the
 ## host's apply_dig broadcast all listen to this instead of polling heights.
@@ -53,6 +60,9 @@ class Chunk:
 
 ## Height of every grid vertex in metres (0 = untouched surface).
 var heights := PackedFloat32Array()
+## World Z of the current waterline. Sea pushes it in as the tide moves, which
+## tints the sand at and below it wet; the colour fades back to dry sand inland.
+var wet_line_z := SHORE_START_Z
 ## Last region passed to rebuild_mesh (debug/tests).
 var last_dirty_rect := Rect2i()
 
@@ -211,13 +221,15 @@ func _update_chunk_region(chunk: Chunk, rect: Rect2i) -> void:
 	for gz in range(gz0, gz1 + 1):
 		var local_z := gz - chunk.grid_z
 		var row := gz * GRID_SIZE
+		var world_z := (float(gz) - HALF_GRID) * CELL_SIZE
 		for gx in range(gx0, gx1 + 1):
 			var local_x := gx - chunk.grid_x
 			var vertex_index := local_z * chunk.size_x + local_x
 			var height := heights[row + gx]
+			var world_x := (float(gx) - HALF_GRID) * CELL_SIZE
 			chunk.vertices[vertex_index] = Vector3(local_x * CELL_SIZE, height, local_z * CELL_SIZE)
 			chunk.normals[vertex_index] = _normal_at(gx, gz)
-			chunk.colors[vertex_index] = _color_at(height)
+			chunk.colors[vertex_index] = _color_at(height, world_x, world_z)
 
 
 func _upload_chunk(chunk: Chunk) -> void:
@@ -242,9 +254,51 @@ func _normal_at(x: int, z: int) -> Vector3:
 	return Vector3(-slope_x, 1.0, -slope_z).normalized()
 
 
-func _color_at(height: float) -> Color:
+## Tints the sand for the current state: darker where it is buried, wet below the
+## waterline, forest floor near the pines and leaf litter near the log barriers.
+func _color_at(height: float, world_x: float, world_z: float) -> Color:
 	var depth_ratio := clampf(-height / MAX_DEPTH, 0.0, 1.0)
-	return SAND_TOP_COLOR.lerp(SAND_DEEP_COLOR, pow(depth_ratio, 0.55))
+	var color := SAND_TOP_COLOR.lerp(SAND_DEEP_COLOR, pow(depth_ratio, 0.55))
+
+	# The inland dressing only exists on dry sand, so fade it out near the shore.
+	var inland := smoothstep(SHORE_START_Z - 3.0, SHORE_START_Z + 3.0, world_z)
+	var forest := smoothstep(19.0, 25.0, world_x) * inland
+	var litter := maxf(
+		smoothstep(-20.0, -26.0, world_x),
+		smoothstep(20.0, 26.0, world_z)) * inland
+	color = color.lerp(FOREST_FLOOR_COLOR, forest * 0.95)
+	color = color.lerp(LEAF_LITTER_COLOR, litter * 0.9)
+
+	# Wet sand: everything at or below the waterline, fading dry several metres
+	# inland. This band is what makes the tide readable from the beach.
+	var wet := smoothstep(wet_line_z + 4.5, wet_line_z, world_z)
+	color = color.lerp(SAND_WET_COLOR, wet * 0.85)
+
+	# A darker rim right at the waterline gives the eye a crisp edge to follow as
+	# the tide walks it up and down the sand.
+	var rim := 1.0 - smoothstep(0.0, 0.8, absf(world_z - wet_line_z))
+	color = color.lerp(SAND_WET_COLOR.darkened(0.25), rim * 0.55)
+
+	# Fine grain so the wide flat beach does not read as one solid colour.
+	return color.lightened(_grain(world_x, world_z) * 0.05)
+
+
+## Moves the wet-sand band to the tide's current waterline. Only the chunk rows
+## the band can touch are rebuilt, so this is cheap enough to follow the tide.
+func set_wet_line(world_z: float) -> void:
+	if absf(world_z - wet_line_z) < 0.12:
+		return
+	wet_line_z = world_z
+	if _chunks.is_empty():
+		return
+	var gz0 := clampi(floori((world_z - 5.0) / CELL_SIZE + HALF_GRID), 0, GRID_SIZE - 1)
+	var gz1 := clampi(ceili((world_z + 6.0) / CELL_SIZE + HALF_GRID), 0, GRID_SIZE - 1)
+	rebuild_mesh(Rect2i(0, gz0, GRID_SIZE - 1, gz1 - gz0 + 1))
+
+
+func _grain(x: float, z: float) -> float:
+	var n := sin(x * 12.9898 + z * 78.233) * 43758.5453
+	return n - floorf(n)
 
 
 func _create_material() -> StandardMaterial3D:

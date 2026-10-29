@@ -49,11 +49,29 @@ func _ready() -> void:
 	# 5. The beach with the tide in: sea, foam line and wet sand.
 	var sea := get_tree().get_first_node_in_group("sea") as Sea
 	if sea != null:
-		player.global_position = Vector3(0.0, 0.2, -5.0)
+		player.global_position = Vector3(0.0, 0.2, -3.0)
 		player.rotation.y = 0.0
 		sea._update_tide(Sea.TIDE_PERIOD * 0.5)
 		await get_tree().create_timer(0.8).timeout
 		_save("res://proof_sea.png")
+
+		# 6. The pine forest closing the +X edge.
+		player.global_position = Vector3(4.0, 0.2, 8.0)
+		player.rotation.y = -PI * 0.5
+		await get_tree().create_timer(0.4).timeout
+		_save("res://proof_forest.png")
+
+		# 7. The fallen-log windfall closing the -X edge.
+		player.global_position = Vector3(0.0, 0.2, 8.0)
+		player.rotation.y = PI * 0.5
+		await get_tree().create_timer(0.4).timeout
+		_save("res://proof_windfall.png")
+
+		# 8. The whole coast from the shallows: sea on one side only.
+		player.global_position = Vector3(0.0, 0.2, -14.0)
+		player.rotation.y = PI
+		await get_tree().create_timer(0.4).timeout
+		_save("res://proof_coast_wide.png")
 
 	get_tree().quit(0)
 

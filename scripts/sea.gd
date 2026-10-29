@@ -14,12 +14,17 @@ extends Node3D
 signal tide_turned(rising: bool)
 
 ## Water height in metres. The beach is at y = 0, so both values are below it.
-const TIDE_LOW := -0.75
-const TIDE_HIGH := -0.12
+## The range is deliberately wide: a metre of tide walks the waterline several
+## metres up and down the shallow shore, which is what makes it visible.
+const TIDE_LOW := -1.15
+const TIDE_HIGH := -0.06
 ## One full low -> high -> low cycle, in seconds.
 const TIDE_PERIOD := 60.0
-## The plane is huge so it reaches the horizon; the land hides the inland part.
+## How wide the sea is (X) and how far out it reaches (Z). The plane stops at
+## Z = 0 so the water only ever exists on the -Z side of the beach; the other
+## three edges are forest and windfall, never open water.
 const WATER_SIZE := 700.0
+const WATER_SPAN_Z := 460.0
 
 ## Current water height (world Y).
 var level := TIDE_LOW
@@ -82,20 +87,22 @@ func _update_shoreline() -> void:
 	shoreline_z = (dry + deep) * 0.5
 	if _material != null:
 		_material.set_shader_parameter("shoreline_z", shoreline_z)
+	# Keep the wet-sand band on the terrain glued to the moving waterline.
+	_terrain.set_wet_line(shoreline_z)
 
 
 func _build() -> void:
 	var water := MeshInstance3D.new()
 	water.name = "Water"
 	var plane := PlaneMesh.new()
-	plane.size = Vector2(WATER_SIZE, WATER_SIZE)
+	plane.size = Vector2(WATER_SIZE, WATER_SPAN_Z)
 	plane.subdivide_width = 110
-	plane.subdivide_depth = 110
+	plane.subdivide_depth = 90
 	water.mesh = plane
 	water.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	# Shift the plane out to sea so the visible half is the open water and the
-	# inland half stays hidden underneath the beach.
-	water.position = Vector3(0.0, 0.0, -80.0)
+	# The plane spans Z = -WATER_SPAN_Z .. 0, so the sea reaches the horizon on
+	# the -Z side but never wraps around the inland edges of the beach.
+	water.position = Vector3(0.0, 0.0, -WATER_SPAN_Z * 0.5)
 	_water = water
 
 	# Dark seabed under the open water, past the edge of the 64 m heightmap. It
@@ -103,10 +110,10 @@ func _build() -> void:
 	var seabed := MeshInstance3D.new()
 	seabed.name = "Seabed"
 	var floor_mesh := PlaneMesh.new()
-	floor_mesh.size = Vector2(WATER_SIZE, WATER_SIZE)
+	floor_mesh.size = Vector2(WATER_SIZE, WATER_SPAN_Z)
 	seabed.mesh = floor_mesh
 	seabed.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	seabed.position = Vector3(0.0, SandTerrain.SEA_FLOOR - 0.4, -80.0)
+	seabed.position = Vector3(0.0, SandTerrain.SEA_FLOOR - 0.4, -WATER_SPAN_Z * 0.5)
 	var floor_material := StandardMaterial3D.new()
 	floor_material.albedo_color = Color(0.16, 0.15, 0.13)
 	floor_material.roughness = 1.0

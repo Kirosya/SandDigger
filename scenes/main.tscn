@@ -10,6 +10,7 @@
 [ext_resource type="Script" path="res://scripts/market.gd" id="8_market"]
 [ext_resource type="Script" path="res://scripts/shop_ui.gd" id="9_shop"]
 [ext_resource type="Script" path="res://scripts/sea.gd" id="10_sea"]
+[ext_resource type="Script" path="res://scripts/coastal_scenery.gd" id="11_scenery"]
 
 [sub_resource type="ProceduralSkyMaterial" id="SkyMaterial_sand"]
 sky_top_color = Color(0.28, 0.52, 0.85, 1)
@@ -26,9 +27,14 @@ background_mode = 2
 sky = SubResource("Sky_sand")
 ambient_light_source = 2
 ambient_light_color = Color(0.72, 0.8, 0.95, 1)
-ambient_light_energy = 0.2
+ambient_light_energy = 0.32
 tonemap_mode = 3
 tonemap_white = 1.6
+fog_enabled = true
+fog_light_color = Color(0.72, 0.84, 0.95, 1)
+fog_light_energy = 0.6
+fog_density = 0.0017
+fog_sky_affect = 0.0
 
 [node name="Main" type="Node3D" unique_id=2013544793]
 script = ExtResource("1_main")
@@ -49,6 +55,9 @@ script = ExtResource("2_terrain")
 
 [node name="Sea" type="Node3D" parent="."]
 script = ExtResource("10_sea")
+
+[node name="CoastalScenery" type="Node3D" parent="."]
+script = ExtResource("11_scenery")
 
 [node name="Player" parent="." unique_id=675574756 instance=ExtResource("3_player")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.2, 6)

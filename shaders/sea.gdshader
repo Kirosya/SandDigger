@@ -8,14 +8,16 @@ render_mode blend_mix, depth_draw_never, cull_back, diffuse_burley, specular_sch
 uniform vec4 shallow_color : source_color = vec4(0.15, 0.55, 0.60, 1.0);
 uniform vec4 deep_color : source_color = vec4(0.02, 0.14, 0.28, 1.0);
 uniform vec4 foam_color : source_color = vec4(0.96, 0.99, 1.0, 1.0);
-uniform float shallow_alpha = 0.50;
-uniform float deep_alpha = 0.95;
-uniform float foam_width = 1.4;
+uniform float shallow_alpha = 0.42;
+uniform float deep_alpha = 0.94;
+uniform float foam_width = 2.2;
 uniform float wave_height = 0.03;
 // World Z of the waterline (more negative = further out to sea).
 uniform float shoreline_z = -13.0;
-// How many metres offshore the water reaches its deep colour.
-uniform float deep_distance = 30.0;
+// How many metres offshore the water reaches its deep colour. The seabed slopes
+// gently for ~22 m, so this keeps the shallows readable instead of snapping to
+// deep blue right at the waterline.
+uniform float deep_distance = 26.0;
 
 varying vec3 world_pos;
 

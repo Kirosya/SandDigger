@@ -69,8 +69,13 @@ const SEA_MAX_FLOATING := 6
 ## Total tide-delivered junk allowed in the world (stops the beach silting up).
 const SEA_MAX_TOTAL := 40
 const SEA_DRIFT_SPEED := 0.7
-## Loot never spawns further out than this (Z); the sand below it is under water.
-const DRY_LIMIT_Z := -9.0
+## Loot never spawns further out than this (Z); the sand below it is under water
+## (or gets wet at high tide).
+const DRY_LIMIT_Z := -10.5
+## The playable sand: inside the pine forest on +X and the log barriers on -X
+## and +Z, so loot never ends up buried under the scenery.
+const DRY_LIMIT_X := 20.5
+const INLAND_LIMIT_Z := 22.5
 
 ## How hard metal clutter can wobble the detector reading (0..1 added jitter).
 const NOISE_STRENGTH := 0.4
@@ -306,10 +311,10 @@ func _random_point() -> Vector2:
 		point += Vector2(1.4, -0.6)
 	if point.distance_to(JUNKYARD_CLEAR) < 2.2:
 		point += Vector2(-1.8, 1.8)
-	point.x = clampf(point.x, -29.0, 29.0)
-	point.y = clampf(point.y, -29.0, 29.0)
-	# Keep the scatter on dry sand: the beach slopes into the sea past this Z.
-	point.y = maxf(point.y, DRY_LIMIT_Z)
+	# Keep the scatter on the open beach: dry sand toward the sea, and inside the
+	# forest / windfall that closes the other three edges.
+	point.x = clampf(point.x, -DRY_LIMIT_X, DRY_LIMIT_X)
+	point.y = clampf(point.y, DRY_LIMIT_Z, INLAND_LIMIT_Z)
 	return point
 
 
