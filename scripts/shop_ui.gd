@@ -9,7 +9,7 @@ extends CanvasLayer
 const GOLD := Color(1.0, 0.86, 0.42)
 const GREEN := Color(0.5, 0.95, 0.55)
 const DIM := Color(0.55, 0.55, 0.58)
-const PANEL_SIZE := Vector2(660, 480)
+const PANEL_SIZE := Vector2(700, 540)
 
 var _state: PlayerState
 var _player: Node3D
@@ -18,6 +18,7 @@ var _money: Label
 var _message: Label
 var _row_names: Array[Label] = []
 var _row_status: Array[Label] = []
+var _rows: Array[Button] = []
 var _ignore_until := 0
 
 
@@ -79,6 +80,11 @@ func _buy(index: int) -> void:
 	_refresh()
 
 
+## A click / tap on a row buys it, exactly like the number keys.
+func _on_row_pressed(index: int) -> void:
+	_buy(index)
+
+
 func _buy_detector() -> void:
 	if _state.has_detector:
 		_message.text = "You already own the metal detector."
@@ -119,9 +125,13 @@ func _refresh() -> void:
 
 	# Row 0: the detector.
 	var owns_detector := _state.has_detector
-	_set_row(0, "[1]  Metal Detector",
-		"OWNED" if owns_detector else "$%d" % int(PlayerState.DETECTOR_PRICE),
-		GREEN if owns_detector else GOLD, DIM if owns_detector else Color.WHITE)
+	if owns_detector:
+		_set_row(0, "[1]  Metal Detector", "OWNED", GREEN, DIM)
+	else:
+		var can_buy := _state.current_money >= PlayerState.DETECTOR_PRICE
+		_set_row(0, "[1]  Metal Detector",
+			("BUY  $%d" if can_buy else "$%d") % int(PlayerState.DETECTOR_PRICE),
+			GREEN if can_buy else GOLD, Color.WHITE)
 
 	# Rows 1..3: the shovel chain.
 	for i in range(1, _row_names.size()):
@@ -134,9 +144,12 @@ func _refresh() -> void:
 		if i <= _state.equipment_tier_index:
 			_set_row(i, label, "OWNED", GREEN, DIM)
 		elif i == _state.equipment_tier_index + 1:
+			var affordable := _state.current_level >= tier.level_required \
+				and _state.current_money >= tier.money_required
 			_set_row(i, label,
-				"$%d  ·  Lv %d" % [int(tier.money_required), tier.level_required],
-				GOLD, Color.WHITE)
+				("BUY  $%d  ·  Lv %d" if affordable else "$%d  ·  Lv %d") % [
+					int(tier.money_required), tier.level_required],
+				GREEN if affordable else GOLD, Color.WHITE)
 		else:
 			_set_row(i, label, "LOCKED  ·  Lv %d" % tier.level_required,
 				DIM, DIM)
@@ -197,16 +210,44 @@ func _build() -> void:
 	box.add_child(rule)
 
 	for i in 4:
+		# The whole row is a Button, so a mouse click or a touch tap buys it.
+		# The labels inside ignore the mouse so the click always reaches the row.
+		var button := Button.new()
+		button.custom_minimum_size = Vector2(0, 52)
+		button.focus_mode = Control.FOCUS_NONE
+		button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+		button.add_theme_stylebox_override("normal",
+			_row_style(Color(1, 1, 1, 0.04), Color(1, 1, 1, 0.12)))
+		button.add_theme_stylebox_override("hover",
+			_row_style(Color(1.0, 0.86, 0.42, 0.16), Color(1.0, 0.86, 0.42, 0.7)))
+		button.add_theme_stylebox_override("pressed",
+			_row_style(Color(1.0, 0.86, 0.42, 0.32), GOLD))
+		button.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
+		button.pressed.connect(_on_row_pressed.bind(i))
+
+		var margin := MarginContainer.new()
+		margin.set_anchors_preset(Control.PRESET_FULL_RECT)
+		margin.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		margin.add_theme_constant_override("margin_left", 16)
+		margin.add_theme_constant_override("margin_right", 16)
+
 		var row := HBoxContainer.new()
+		row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		row.add_theme_constant_override("separation", 12)
 		var name_label := _make_label(21, Color.WHITE)
 		name_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		name_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 		var status_label := _make_label(19, GOLD)
 		status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		status_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 		status_label.custom_minimum_size = Vector2(240, 0)
 		row.add_child(name_label)
 		row.add_child(status_label)
-		box.add_child(row)
+		margin.add_child(row)
+		button.add_child(margin)
+
+		box.add_child(button)
+		_rows.append(button)
 		_row_names.append(name_label)
 		_row_status.append(status_label)
 
@@ -216,9 +257,18 @@ func _build() -> void:
 	box.add_child(_message)
 
 	var footer := _make_label(15, Color(1, 1, 1, 0.55))
-	footer.text = "1-4: buy          E / Esc: leave"
+	footer.text = "Click a row to buy   ·   1-4: buy   ·   E / Esc: leave"
 	footer.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	box.add_child(footer)
+
+
+func _row_style(background: Color, border: Color) -> StyleBoxFlat:
+	var style := StyleBoxFlat.new()
+	style.bg_color = background
+	style.border_color = border
+	style.set_border_width_all(2)
+	style.set_corner_radius_all(8)
+	return style
 
 
 func _make_label(font_size: int, color: Color) -> Label:

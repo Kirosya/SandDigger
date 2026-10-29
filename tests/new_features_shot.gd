@@ -44,6 +44,16 @@ func _ready() -> void:
 	await get_tree().create_timer(0.5).timeout
 	_save("res://proof_third_person.png")
 	Input.action_release("third_person")
+	await get_tree().create_timer(0.3).timeout
+
+	# 5. The beach with the tide in: sea, foam line and wet sand.
+	var sea := get_tree().get_first_node_in_group("sea") as Sea
+	if sea != null:
+		player.global_position = Vector3(0.0, 0.2, -5.0)
+		player.rotation.y = 0.0
+		sea._update_tide(Sea.TIDE_PERIOD * 0.5)
+		await get_tree().create_timer(0.8).timeout
+		_save("res://proof_sea.png")
 
 	get_tree().quit(0)
 

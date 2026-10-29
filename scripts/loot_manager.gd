@@ -53,6 +53,25 @@ const TRASH_NAMES := [
 ## looking for, so it shows up as noise rather than as a clean reading.
 const METAL_NAMES := ["Rusty Can", "Scrap Metal", "Tin Lid"]
 
+## --- Tide trash ---------------------------------------------------------
+## While the tide is coming in, junk floats in from the sea, drifts toward the
+## beach and turns into ordinary surface loot when it reaches the dry sand.
+const SEA_TRASH_NAMES := [
+	"Driftwood",
+	"Sea Glass",
+	"Old Buoy",
+	"Tangled Net",
+	"Plastic Bottle",
+]
+const SEA_SPAWN_INTERVAL := 4.0
+## How many pieces may be bobbing in the surf at once.
+const SEA_MAX_FLOATING := 6
+## Total tide-delivered junk allowed in the world (stops the beach silting up).
+const SEA_MAX_TOTAL := 40
+const SEA_DRIFT_SPEED := 0.7
+## Loot never spawns further out than this (Z); the sand below it is under water.
+const DRY_LIMIT_Z := -9.0
+
 ## How hard metal clutter can wobble the detector reading (0..1 added jitter).
 const NOISE_STRENGTH := 0.4
 ## Metal contributions are summed then divided by this, so a single can is a
@@ -75,6 +94,13 @@ class LootItem:
 	var metal := false
 	## True for junk that spawns lying on the sand instead of buried in it.
 	var on_surface := false
+	## True while this item is still floating in the surf, drifting toward the
+	## beach. It is not affected by digging until it washes ashore.
+	var floating := false
+	## Where a floating item is heading before it becomes normal surface loot.
+	var drift_target := Vector3.ZERO
+	## True for items the tide floated in (they count against the sea-trash cap).
+	var from_sea := false
 	var node: Node3D
 
 
@@ -87,6 +113,8 @@ var _next_id := 1
 var _materials: Dictionary = {}
 var _rng := RandomNumberGenerator.new()
 var _noise_rng := RandomNumberGenerator.new()
+var _sea: Sea
+var _sea_spawn_timer := 2.0
 
 
 func _ready() -> void:
@@ -98,6 +126,23 @@ func _ready() -> void:
 	_spawn_loot()
 	if _terrain != null:
 		_terrain.dug.connect(_on_sand_dug)
+
+
+func _process(delta: float) -> void:
+	if _sea == null:
+		_sea = get_tree().get_first_node_in_group("sea") as Sea
+		if _sea == null:
+			return
+	_drift_floating(delta)
+	if not _sea.rising:
+		return
+	_sea_spawn_timer -= delta
+	if _sea_spawn_timer > 0.0:
+		return
+	_sea_spawn_timer = SEA_SPAWN_INTERVAL
+	if _floating_count() >= SEA_MAX_FLOATING or _sea_trash_count() >= SEA_MAX_TOTAL:
+		return
+	_spawn_sea_trash()
 
 
 ## First claim wins. Returns false when the item is unknown, still buried, or
@@ -248,6 +293,7 @@ func _starter_point() -> Vector2:
 	var point := SPAWN_CLEAR + Vector2(cos(angle), sin(angle)) * radius
 	if point.distance_to(JUNKYARD_CLEAR) < 2.2:
 		point += Vector2(-1.6, 1.6)
+	point.y = maxf(point.y, DRY_LIMIT_Z)
 	return point
 
 
@@ -262,6 +308,8 @@ func _random_point() -> Vector2:
 		point += Vector2(-1.8, 1.8)
 	point.x = clampf(point.x, -29.0, 29.0)
 	point.y = clampf(point.y, -29.0, 29.0)
+	# Keep the scatter on dry sand: the beach slopes into the sea past this Z.
+	point.y = maxf(point.y, DRY_LIMIT_Z)
 	return point
 
 
@@ -292,6 +340,83 @@ func _build_item(point: Vector2) -> LootItem:
 		item.revealed = true
 		_place_on_surface(item)
 	return item
+
+
+## --- Tide trash ---------------------------------------------------------
+
+## Floats one piece of junk in from the sea. It starts offshore, drifts toward a
+## spot on the dry sand and becomes ordinary surface loot when it gets there.
+## Returns the new item (or null when there is no sea in the scene).
+func _spawn_sea_trash() -> LootItem:
+	if _sea == null:
+		return null
+	var shore := _sea.shoreline_z
+	var x := _rng.randf_range(-14.0, 14.0)
+	var spawn_z := shore - _rng.randf_range(3.5, 8.0)
+	var target_z := shore + _rng.randf_range(1.2, 4.0)
+
+	var item := LootItem.new()
+	item.loot_id = _next_id
+	_next_id += 1
+	item.kind = "trash"
+	item.display_name = SEA_TRASH_NAMES[_rng.randi() % SEA_TRASH_NAMES.size()]
+	item.metal = false
+	item.value = _rng.randf_range(14.0, 38.0)
+	item.on_surface = true
+	item.revealed = true
+	item.floating = true
+	item.from_sea = true
+	item.buried_position = Vector3(x, 0.0, spawn_z)
+	item.drift_target = Vector3(x + _rng.randf_range(-1.5, 1.5), 0.0, target_z)
+	item.node = _make_visual(item)
+	item.node.position = Vector3(x, _sea.level + 0.06, spawn_z)
+	loot.append(item)
+	return item
+
+
+func _drift_floating(delta: float) -> void:
+	for item in loot:
+		if item.claimed or not item.floating or item.node == null:
+			continue
+		var pos := item.node.position
+		var to_target := Vector2(item.drift_target.x - pos.x, item.drift_target.z - pos.z)
+		var distance := to_target.length()
+		if distance <= 0.2:
+			_beach_sea_trash(item)
+			continue
+		var step := minf(SEA_DRIFT_SPEED * delta, distance)
+		pos.x += to_target.x / distance * step
+		pos.z += to_target.y / distance * step
+		# Bob on the current tide level while it rides the surf in.
+		pos.y = _sea.level + 0.06 + sin(Time.get_ticks_msec() * 0.002 + float(item.loot_id)) * 0.04
+		item.node.position = pos
+		item.buried_position = Vector3(pos.x, 0.0, pos.z)
+
+
+## Turns a floating item into normal surface loot on the dry sand.
+func _beach_sea_trash(item: LootItem) -> void:
+	item.floating = false
+	item.buried_position = Vector3(item.drift_target.x, 0.0, item.drift_target.z)
+	if item.node != null:
+		item.node.position = Vector3(item.buried_position.x, 0.0, item.buried_position.z)
+	_place_on_surface(item)
+	print("[sea] '%s' washed ashore at %s" % [item.display_name, str(item.buried_position)])
+
+
+func _floating_count() -> int:
+	var count := 0
+	for item in loot:
+		if not item.claimed and item.floating:
+			count += 1
+	return count
+
+
+func _sea_trash_count() -> int:
+	var count := 0
+	for item in loot:
+		if not item.claimed and item.from_sea:
+			count += 1
+	return count
 
 
 ## Puts a surface item back on top of the current sand height.
@@ -390,6 +515,30 @@ func _make_piece(item: LootItem) -> MeshInstance3D:
 		mesh_instance.mesh = lid
 		mesh_instance.rotation_degrees = Vector3(0.0, tilt, 0.0)
 		material_kind = "tin"
+	elif "drift" in label:
+		var wood := BoxMesh.new()
+		wood.size = Vector3(0.42, 0.06, 0.1)
+		mesh_instance.mesh = wood
+		mesh_instance.rotation_degrees = Vector3(0.0, tilt, 3.0)
+		material_kind = "driftwood"
+	elif "glass" in label:
+		var glass := SphereMesh.new()
+		glass.radius = 0.085
+		glass.height = 0.13
+		glass.radial_segments = 10
+		glass.rings = 6
+		mesh_instance.mesh = glass
+		mesh_instance.rotation_degrees = Vector3(0.0, tilt, 0.0)
+		material_kind = "seaglass"
+	elif "buoy" in label:
+		var buoy := SphereMesh.new()
+		buoy.radius = 0.14
+		buoy.height = 0.26
+		buoy.radial_segments = 12
+		buoy.rings = 8
+		mesh_instance.mesh = buoy
+		mesh_instance.rotation_degrees = Vector3(0.0, tilt, 0.0)
+		material_kind = "buoy"
 	else:
 		var scrap := BoxMesh.new()
 		scrap.size = Vector3(0.24, 0.035, 0.18)
@@ -437,6 +586,18 @@ func _get_material(kind: String) -> StandardMaterial3D:
 			material.albedo_color = Color(0.8, 0.79, 0.71)
 			material.metallic = 0.0
 			material.roughness = 0.95
+		"driftwood":
+			material.albedo_color = Color(0.45, 0.33, 0.22)
+			material.metallic = 0.0
+			material.roughness = 0.95
+		"seaglass":
+			material.albedo_color = Color(0.36, 0.8, 0.72)
+			material.metallic = 0.1
+			material.roughness = 0.15
+		"buoy":
+			material.albedo_color = Color(0.93, 0.44, 0.16)
+			material.metallic = 0.0
+			material.roughness = 0.6
 		_:
 			material.albedo_color = Color(0.46, 0.28, 0.16)
 			material.metallic = 0.2
@@ -449,7 +610,7 @@ func _on_sand_dug(world_position: Vector3, radius: float, _depth: float) -> void
 	if _terrain == null:
 		return
 	for item in loot:
-		if item.claimed:
+		if item.claimed or item.floating:
 			continue
 		var flat := Vector2(
 			item.buried_position.x - world_position.x,

@@ -32,6 +32,9 @@ const VIEWMODEL_LAYER := 4
 const TOOL_SHOVEL := 0
 const TOOL_DETECTOR := 1
 
+## Emitted when Q swaps the hand between the shovel and the detector.
+signal tool_mode_changed(mode: int)
+
 @onready var head: Node3D = $Head
 @onready var camera: Camera3D = $Head/Camera3D
 @onready var spoon_pivot: Node3D = $Head/Camera3D/SpoonPivot
@@ -94,8 +97,12 @@ func apply_equipment(equipment: EquipmentData) -> void:
 
 ## Swaps which tool the first-person hand holds.
 func set_tool_mode(mode: int) -> void:
-	tool_mode = TOOL_DETECTOR if mode == TOOL_DETECTOR else TOOL_SHOVEL
+	var next := TOOL_DETECTOR if mode == TOOL_DETECTOR else TOOL_SHOVEL
+	var changed := next != tool_mode
+	tool_mode = next
 	_update_hand_visuals()
+	if changed:
+		tool_mode_changed.emit(tool_mode)
 
 
 func toggle_tool() -> void:
@@ -214,8 +221,8 @@ func _physics_process(delta: float) -> void:
 
 	move_and_slide()
 
-	# Safety net: fell off the sand or into a very deep pit.
-	if global_position.y < -8.0:
+	# Safety net: fell off the beach or waded out past the sea floor.
+	if global_position.y < -3.5:
 		respawn()
 
 

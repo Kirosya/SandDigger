@@ -42,9 +42,21 @@ var has_detector: bool = false
 ## Ordered equipment chain for THIS player.
 var tiers: Array[EquipmentData] = []
 
-## Loot this player has claimed but not yet sold. Each entry is a Dictionary:
-## { id: int, name: String, kind: String, value: float }.
-var carried_loot: Array[Dictionary] = []
+## Sparse bag: always INVENTORY_SLOTS entries in slot order. Each filled entry is
+## a Dictionary { id, name, kind, value }; an empty slot is {}. Items NEVER shift
+## between slots, so a sold item leaves its slot empty instead of pulling the
+## later items forward.
+var bag_slots: Array[Dictionary] = []
+
+## Compact read-only view of the carried items (only the filled slots, in slot
+## order). Handy for code that just wants to loop over what the player has.
+var carried_loot: Array[Dictionary]:
+	get:
+		var items: Array[Dictionary] = []
+		for slot in bag_slots:
+			if not slot.is_empty():
+				items.append(slot)
+		return items
 
 ## Which bag slot is held in hand. -1 means empty-handed (the tool is in hand).
 var held_slot: int = -1
@@ -55,6 +67,7 @@ func _ready() -> void:
 	if tiers.is_empty():
 		tiers = EquipmentData.default_tiers()
 	equipment_tier_index = clampi(equipment_tier_index, 0, tiers.size() - 1)
+	_ensure_bag()
 
 
 ## Adds sand volume removed by a dig and converts it to XP.
@@ -121,29 +134,53 @@ func get_current_equipment() -> EquipmentData:
 
 ## --- Inventory ---------------------------------------------------------
 
+## Fills the bag with exactly INVENTORY_SLOTS empty slots. Called from _ready and
+## lazily from the bag API so PlayerState also works before it enters the tree.
+func _ensure_bag() -> void:
+	while bag_slots.size() < INVENTORY_SLOTS:
+		bag_slots.append({})
+	if bag_slots.size() > INVENTORY_SLOTS:
+		bag_slots.resize(INVENTORY_SLOTS)
+
+
+## How many slots are actually filled.
+func carried_count() -> int:
+	var count := 0
+	for slot in bag_slots:
+		if not slot.is_empty():
+			count += 1
+	return count
+
+
 func is_inventory_full() -> bool:
-	return carried_loot.size() >= INVENTORY_SLOTS
+	return carried_count() >= INVENTORY_SLOTS
 
 
-## Puts a claimed loot item in the bag. Returns false when the bag is full.
+## Puts a claimed loot item in the first empty slot. Returns false when full.
+## The slot index is kept for as long as the item is in the bag.
 func add_loot(item: Dictionary) -> bool:
-	if is_inventory_full():
-		return false
-	carried_loot.append(item)
-	_emit_inventory()
-	return true
+	_ensure_bag()
+	for i in bag_slots.size():
+		if bag_slots[i].is_empty():
+			bag_slots[i] = item
+			_emit_inventory()
+			return true
+	return false
 
 
 ## The item currently held in hand, or {} when empty-handed.
 func held_item() -> Dictionary:
-	if held_slot < 0 or held_slot >= carried_loot.size():
+	_ensure_bag()
+	if held_slot < 0 or held_slot >= bag_slots.size():
 		return {}
-	return carried_loot[held_slot]
+	return bag_slots[held_slot]
 
 
 ## Puts bag slot `index` in hand. Pressing the same slot again puts it away.
+## Empty slots cannot be held.
 func set_held_slot(index: int) -> void:
-	if index < 0 or index >= carried_loot.size():
+	_ensure_bag()
+	if index < 0 or index >= bag_slots.size() or bag_slots[index].is_empty():
 		if held_slot != -1:
 			held_slot = -1
 			_emit_inventory()
@@ -153,15 +190,14 @@ func set_held_slot(index: int) -> void:
 
 
 ## Sells ONLY the item in hand. Returns the sold item, or {} when empty-handed.
+## The sold item's slot becomes empty and stays empty: the other items keep the
+## slots they were picked up into.
 func sell_held() -> Dictionary:
 	var item := held_item()
 	if item.is_empty():
 		return {}
-	carried_loot.remove_at(held_slot)
-	if carried_loot.is_empty():
-		held_slot = -1
-	else:
-		held_slot = mini(held_slot, carried_loot.size() - 1)
+	bag_slots[held_slot] = {}
+	held_slot = -1
 	add_money(float(item.get("value", 0.0)))
 	_emit_inventory()
 	return item
@@ -170,14 +206,15 @@ func sell_held() -> Dictionary:
 ## Total junkyard value of everything currently carried.
 func carried_value() -> float:
 	var total := 0.0
-	for item in carried_loot:
-		total += float(item.get("value", 0.0))
+	for slot in bag_slots:
+		if not slot.is_empty():
+			total += float(slot.get("value", 0.0))
 	return total
 
 
 func _emit_inventory() -> void:
-	carried_changed.emit(carried_loot.size(), carried_value())
-	inventory_changed.emit(carried_loot, held_slot)
+	carried_changed.emit(carried_count(), carried_value())
+	inventory_changed.emit(bag_slots, held_slot)
 
 
 ## --- Tools / upgrades --------------------------------------------------

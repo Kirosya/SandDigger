@@ -30,9 +30,16 @@ var _status_text := ""
 var _banner: Label
 var _banner_tween: Tween
 
-## Seven-slot bag bar along the bottom of the screen.
+## Bag bar: the two equipped tools (shovel, detector) on the left, then the seven
+## loot slots in fixed positions. The active tool / held slot glows gold.
+const TOOL_PANEL_WIDTH := 122.0
+const SLOT_WIDTH := 106.0
+
 var _slot_panels: Array[Panel] = []
 var _slot_labels: Array[Label] = []
+var _tool_panels: Array[Panel] = []
+var _tool_labels: Array[Label] = []
+var _player_node: FirstPersonPlayer
 
 ## Screen-edge wash that pulses with the detector beeps.
 var _edge: TextureRect
@@ -189,54 +196,93 @@ func _make_label(font_size: int, color: Color) -> Label:
 	return label
 
 
-## Seven bag slots in a row: number, item name and value. The slot in hand is
-## highlighted gold so "hold an item, then sell it" is obvious at a glance.
+## Two equipment panels (shovel + detector) followed by the seven bag slots, in
+## a row at the bottom of the screen. Items keep their slot: selling one leaves
+## its box empty instead of sliding the rest along.
 func _build_inventory_bar(root: Control) -> void:
 	var bar := HBoxContainer.new()
 	bar.name = "Inventory"
 	bar.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
-	bar.position += Vector2(-458, -62)
+	bar.position += Vector2(-534, -62)
 	bar.add_theme_constant_override("separation", 8)
 	bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	root.add_child(bar)
 
-	for i in PlayerState.INVENTORY_SLOTS:
-		var panel := Panel.new()
-		panel.custom_minimum_size = Vector2(124, 58)
-		panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		var style := StyleBoxFlat.new()
-		style.bg_color = Color(0.05, 0.06, 0.08, 0.55)
-		style.border_color = Color(1, 1, 1, 0.18)
-		style.set_border_width_all(2)
-		style.set_corner_radius_all(6)
-		panel.add_theme_stylebox_override("panel", style)
+	# Equipped tools.
+	for i in 2:
+		var panel := _make_inventory_panel(TOOL_PANEL_WIDTH)
+		var label := _make_slot_label(11)
+		panel.add_child(label)
+		bar.add_child(panel)
+		_tool_panels.append(panel)
+		_tool_labels.append(label)
 
-		var label := _make_label(11, Color(1, 1, 1, 0.35))
-		label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-		label.clip_text = true
-		label.set_anchors_preset(Control.PRESET_FULL_RECT)
+	var divider := Control.new()
+	divider.custom_minimum_size = Vector2(10, 0)
+	divider.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	bar.add_child(divider)
+
+	# Loot slots, numbered 1-7.
+	for i in PlayerState.INVENTORY_SLOTS:
+		var panel := _make_inventory_panel(SLOT_WIDTH)
+		var label := _make_slot_label(11)
 		label.text = "%d\n-" % (i + 1)
 		panel.add_child(label)
-
 		bar.add_child(panel)
 		_slot_panels.append(panel)
 		_slot_labels.append(label)
 
 
+func _make_inventory_panel(width: float) -> Panel:
+	var panel := Panel.new()
+	panel.custom_minimum_size = Vector2(width, 58)
+	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(0.05, 0.06, 0.08, 0.55)
+	style.border_color = Color(1, 1, 1, 0.18)
+	style.set_border_width_all(2)
+	style.set_corner_radius_all(6)
+	panel.add_theme_stylebox_override("panel", style)
+	return panel
+
+
+func _make_slot_label(font_size: int) -> Label:
+	var label := _make_label(font_size, Color(1, 1, 1, 0.35))
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	label.clip_text = true
+	label.set_anchors_preset(Control.PRESET_FULL_RECT)
+	return label
+
+
 func _refresh_inventory() -> void:
 	if _player == null:
 		return
+
+	# --- Equipment -----------------------------------------------------
+	var active_tool := _player_node.tool_mode if _player_node != null else 0
+	var holding := _player.held_slot >= 0
+	_set_tool_panel(0, "SHOVEL", _player.get_current_equipment().display_name,
+		true, not holding and active_tool == FirstPersonPlayer.TOOL_SHOVEL, Color.WHITE)
+	if _player.has_detector:
+		_set_tool_panel(1, "DETECTOR", "ready", true,
+			not holding and active_tool == FirstPersonPlayer.TOOL_DETECTOR,
+			Color(0.55, 0.95, 1.0))
+	else:
+		_set_tool_panel(1, "DETECTOR", "$%d market" % int(PlayerState.DETECTOR_PRICE),
+			false, false, Color(0.62, 0.62, 0.66))
+
+	# --- Loot slots ----------------------------------------------------
 	for i in _slot_panels.size():
 		var panel := _slot_panels[i]
 		var label := _slot_labels[i]
 		var style := panel.get_theme_stylebox("panel") as StyleBoxFlat
-		var filled := i < _player.carried_loot.size()
-		var held := i == _player.held_slot
+		var slot: Dictionary = _player.bag_slots[i] if i < _player.bag_slots.size() else {}
+		var filled := not slot.is_empty()
+		var held := filled and i == _player.held_slot
 		if filled:
-			var item: Dictionary = _player.carried_loot[i]
 			label.text = "%d  %s\n$%d" % [
-				i + 1, str(item.get("name", "?")), int(item.get("value", 0))]
+				i + 1, str(slot.get("name", "?")), int(slot.get("value", 0))]
 			label.add_theme_color_override("font_color",
 				GOLD if held else Color(1, 1, 1, 0.85))
 		else:
@@ -245,6 +291,23 @@ func _refresh_inventory() -> void:
 		if style != null:
 			style.bg_color = Color(0.34, 0.27, 0.1, 0.8) if held else Color(0.05, 0.06, 0.08, 0.55)
 			style.border_color = GOLD if held else Color(1, 1, 1, 0.18)
+
+
+func _set_tool_panel(index: int, header: String, value: String, owned: bool,
+		active: bool, color: Color) -> void:
+	var label := _tool_labels[index]
+	label.text = "%s\n%s" % [header, value]
+	label.add_theme_color_override("font_color", GOLD if active else color)
+	var style := _tool_panels[index].get_theme_stylebox("panel") as StyleBoxFlat
+	if style == null:
+		return
+	style.bg_color = Color(0.12, 0.24, 0.3, 0.85) if active else Color(0.05, 0.06, 0.08, 0.55)
+	if active:
+		style.border_color = GOLD
+	elif owned:
+		style.border_color = Color(0.55, 0.95, 1.0, 0.45)
+	else:
+		style.border_color = Color(1, 1, 1, 0.14)
 
 
 ## Full-screen radial wash that is transparent in the middle and solid at the
@@ -307,12 +370,16 @@ func _pulse_edge(strength: float) -> void:
 func _bind() -> void:
 	_player = get_tree().get_first_node_in_group("player_state") as PlayerState
 	_loot = get_tree().get_first_node_in_group("loot_manager") as LootManager
+	_player_node = get_tree().get_first_node_in_group("player") as FirstPersonPlayer
 	if _player != null:
 		_player.xp_changed.connect(_on_any_changed)
 		_player.money_changed.connect(_on_money_changed)
 		_player.equipment_changed.connect(_on_equipment_changed)
 		_player.carried_changed.connect(_on_carried_changed)
 		_player.inventory_changed.connect(_on_inventory_changed)
+		_player.detector_changed.connect(_on_detector_changed)
+	if _player_node != null:
+		_player_node.tool_mode_changed.connect(_on_tool_mode_changed)
 	refresh()
 
 
@@ -348,9 +415,9 @@ func refresh() -> void:
 		next_line,
 	])
 	_pocket.text = "Bag %d/%d   $%d   %s" % [
-		_player.carried_loot.size(), PlayerState.INVENTORY_SLOTS,
+		_player.carried_count(), PlayerState.INVENTORY_SLOTS,
 		int(_player.carried_value()),
-		"(sell at the junkyard)" if not _player.carried_loot.is_empty() else "",
+		"(sell at the junkyard)" if _player.carried_count() > 0 else "",
 	]
 	_refresh_inventory()
 
@@ -442,4 +509,12 @@ func _on_carried_changed(_count: int, _value: float) -> void:
 
 
 func _on_inventory_changed(_slots: Array[Dictionary], _held_slot: int) -> void:
+	_refresh_inventory()
+
+
+func _on_detector_changed(_has_detector: bool) -> void:
+	refresh()
+
+
+func _on_tool_mode_changed(_mode: int) -> void:
 	_refresh_inventory()

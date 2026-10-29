@@ -25,6 +25,14 @@ const CHUNKS_PER_SIDE := 8
 const SAND_TOP_COLOR := Color(0.62, 0.5, 0.32)
 const SAND_DEEP_COLOR := Color(0.24, 0.17, 0.09)
 
+## The beach slopes into the sea on the -Z side. Inland (Z > SHORE_START_Z) the
+## sand is flat at 0; past the start it drops smoothly to SEA_FLOOR by
+## SHORE_END_Z, which is what lets the water plane cover it and the tide walk the
+## waterline up and down the sand.
+const SHORE_START_Z := -8.0
+const SHORE_END_Z := -26.0
+const SEA_FLOOR := -2.2
+
 ## Emitted after a dig that changed the heightmap. Loot, VFX and (later) the
 ## host's apply_dig broadcast all listen to this instead of polling heights.
 signal dug(world_position: Vector3, radius: float, depth: float)
@@ -59,10 +67,25 @@ func _ready() -> void:
 	add_to_group("sand_terrain")
 	heights.resize(GRID_SIZE * GRID_SIZE)
 	heights.fill(0.0)
+	_generate_beach()
 	_material = _create_material()
 	_setup_collision()
 	_create_chunks()
 	rebuild_mesh(Rect2i(0, 0, GRID_SIZE, GRID_SIZE))
+
+
+## Carves the static beach profile into the heightmap before the first mesh
+## build: flat sand inland, a smooth slope down into the sea toward -Z.
+func _generate_beach() -> void:
+	var span := SHORE_START_Z - SHORE_END_Z
+	for z in GRID_SIZE:
+		var world_z := (float(z) - HALF_GRID) * CELL_SIZE
+		var t := clampf((SHORE_START_Z - world_z) / span, 0.0, 1.0)
+		var smooth := t * t * (3.0 - 2.0 * t)
+		var height := SEA_FLOOR * smooth
+		var row := z * GRID_SIZE
+		for x in GRID_SIZE:
+			heights[row + x] = height
 
 
 ## Digs a smooth bowl into the sand at `world_pos`.

@@ -9,6 +9,22 @@ func _ready() -> void:
 	_sun.rotation_degrees = Vector3(-55.0, 28.0, 0.0)
 	_sun.light_energy = 0.75
 	_wire_loot_announcements()
+	_wire_tide()
+
+
+func _wire_tide() -> void:
+	var sea := get_tree().get_first_node_in_group("sea") as Sea
+	var hud := get_tree().get_first_node_in_group("hud") as Hud
+	if sea == null or hud == null:
+		return
+	sea.tide_turned.connect(_on_tide_turned.bind(hud))
+
+
+func _on_tide_turned(rising: bool, hud: Hud) -> void:
+	if rising:
+		hud.flash("The tide is coming in - fresh trash is washing ashore")
+	else:
+		hud.flash("The tide is going out")
 
 
 func _wire_loot_announcements() -> void:

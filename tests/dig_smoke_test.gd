@@ -76,7 +76,7 @@ func _ready() -> void:
 	var second_claim := loot.take_loot(target.loot_id, player_two.player_id)
 	print("SMOKE claim_p1=%s claim_p2=%s p1_items=%d p2_items=%d" % [
 		str(first_claim), str(second_claim),
-		player_one.carried_loot.size(), player_two.carried_loot.size()])
+		player_one.carried_count(), player_two.carried_count()])
 
 	# --- Sell only the item in hand, one at a time --------------------------
 	player_one.add_loot({"id": 9001, "name": "Old Boot", "kind": "trash", "value": 12.0})
@@ -86,7 +86,7 @@ func _ready() -> void:
 	var earned := player_one.current_money - money_before_sale
 	print("SMOKE sell carried=%.0f sold=%s earned=%.0f money=%.0f bag=%d held=%d" % [
 		carried, str(sold.get("name", "?")), earned, player_one.current_money,
-		player_one.carried_loot.size(), player_one.held_slot])
+		player_one.carried_count(), player_one.held_slot])
 
 	# --- Upgrade needs level AND money -------------------------------------
 	player_one.add_dig_volume(2.0)

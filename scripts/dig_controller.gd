@@ -174,7 +174,7 @@ func _interact() -> void:
 			if _loot.take_loot(item.loot_id, _state.player_id):
 				_flash_hud("Picked up %s  ($%d)  -  bag %d/%d" % [
 					item.display_name, int(item.value),
-					_state.carried_loot.size(), PlayerState.INVENTORY_SLOTS])
+					_state.carried_count(), PlayerState.INVENTORY_SLOTS])
 			else:
 				_flash_hud("Too late - already claimed")
 
@@ -183,7 +183,7 @@ func _interact() -> void:
 func _select_slot(index: int) -> void:
 	if _state == null:
 		return
-	if index >= _state.carried_loot.size():
+	if index < 0 or index >= _state.bag_slots.size() or _state.bag_slots[index].is_empty():
 		_flash_hud("Slot %d is empty" % (index + 1))
 		return
 	_state.set_held_slot(index)
@@ -257,7 +257,7 @@ func _update_prompt() -> void:
 		if not held.is_empty():
 			_hud.show_prompt("[E] Sell %s  ($%d)" % [
 				str(held.get("name", "item")), int(held.get("value", 0))])
-		elif _state.carried_loot.is_empty():
+		elif _state.carried_count() == 0:
 			_hud.show_prompt("Junkyard - nothing to sell yet")
 		else:
 			_hud.show_prompt("Junkyard - hold an item (1-7) to sell it")

@@ -35,7 +35,9 @@ func _ready() -> void:
 	for i in PlayerState.INVENTORY_SLOTS:
 		state.add_loot({"id": i + 1, "name": "Junk %d" % (i + 1), "kind": "can",
 			"value": 10.0 + float(i)})
-	_check("bag holds 7 items", state.carried_loot.size() == PlayerState.INVENTORY_SLOTS)
+	_check("bag holds 7 items", state.carried_count() == PlayerState.INVENTORY_SLOTS)
+	_check("bag has exactly 7 fixed slots",
+		state.bag_slots.size() == PlayerState.INVENTORY_SLOTS)
 	_check("bag reports full", state.is_inventory_full())
 	_check("an eighth item is rejected",
 		not state.add_loot({"id": 99, "name": "Extra", "kind": "can", "value": 1.0}))
@@ -56,13 +58,21 @@ func _ready() -> void:
 	var earned := state.current_money - money_before
 	print("INV sell carried=%.0f sold=%s earned=%.0f bag=%d held=%d" % [
 		carried_before, str(sold.get("name", "?")), earned,
-		state.carried_loot.size(), state.held_slot])
+		state.carried_count(), state.held_slot])
 	_check("sold exactly the held item", str(sold.get("name", "")) == "Junk 3")
 	_check("only one item left the bag",
-		state.carried_loot.size() == PlayerState.INVENTORY_SLOTS - 1)
+		state.carried_count() == PlayerState.INVENTORY_SLOTS - 1)
 	_check("money increased by that item's value", is_equal_approx(earned, 12.0))
-	_check("held slot slides to the next item",
-		state.held_slot == 2 and str(state.held_item().get("name", "")) == "Junk 4")
+	_check("the sold slot is empty", state.bag_slots[2].is_empty())
+	_check("nothing is held after a sale", state.held_slot == -1)
+	_check("later items keep the slots they were put in",
+		str(state.bag_slots[3].get("name", "")) == "Junk 4"
+		and str(state.bag_slots[6].get("name", "")) == "Junk 7")
+	# New loot fills the first hole instead of shifting everything forward.
+	state.add_loot({"id": 50, "name": "New Junk", "kind": "can", "value": 5.0})
+	_check("new loot fills the first empty slot",
+		str(state.bag_slots[2].get("name", "")) == "New Junk")
+	_check("the bag is full again", state.carried_count() == PlayerState.INVENTORY_SLOTS)
 
 	# --- Detector is a bought hand tool ------------------------------------
 	_check("no detector at the start", not state.has_detector)

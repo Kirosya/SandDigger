@@ -58,8 +58,15 @@ func _ready() -> void:
 	state.add_money(50.0)
 	state.add_dig_volume(2.0)
 	_check("level 3 reached", state.current_level == 3)
-	shop._buy(1)
-	_check("Sand Shovel bought in order", state.equipment_tier_index == 1)
+	# A row is a Button, so a mouse click / touch tap buys it like the keys do.
+	var shovel_row := shop._rows[1] as Button
+	_check("shop rows are clickable buttons", shovel_row != null)
+	if shovel_row != null:
+		var center := shovel_row.get_global_rect().get_center()
+		_click(center)
+		await get_tree().process_frame
+		await get_tree().process_frame
+	_check("Sand Shovel bought by clicking its row", state.equipment_tier_index == 1)
 
 	shop.close()
 	_check("closing the shop unpauses", not get_tree().paused)
@@ -70,16 +77,17 @@ func _ready() -> void:
 	state.set_held_slot(1)
 	player.global_position = yard.global_position + Vector3(0.0, 0.2, 2.0)
 	await get_tree().process_frame
-	var bag_before := state.carried_loot.size()
+	var bag_before := state.carried_count()
 	var money_before_sale := state.current_money
 	_press_key(KEY_E)
 	await get_tree().process_frame
 	await get_tree().process_frame
 	print("SHOP sale bag=%d money=%.0f held=%d" % [
-		state.carried_loot.size(), state.current_money, state.held_slot])
-	_check("one item was sold", state.carried_loot.size() == bag_before - 1)
-	_check("the sold item was the held one", state.carried_loot.size() == 1
-		and str(state.carried_loot[0].get("name", "")) == "Rusty Can")
+		state.carried_count(), state.current_money, state.held_slot])
+	_check("one item was sold", state.carried_count() == bag_before - 1)
+	_check("the sold item was the held one",
+		str(state.bag_slots[0].get("name", "")) == "Rusty Can"
+		and state.bag_slots[1].is_empty())
 	_check("junkyard paid the item value",
 		is_equal_approx(state.current_money - money_before_sale, 44.0))
 
@@ -90,7 +98,7 @@ func _ready() -> void:
 	await get_tree().process_frame
 	await get_tree().process_frame
 	_check("empty hand sells nothing",
-		state.carried_loot.size() == 1
+		state.carried_count() == 1
 		and is_equal_approx(state.current_money, money_before_empty))
 
 	_finish()
@@ -102,6 +110,23 @@ func _press_key(keycode: Key) -> void:
 	event.physical_keycode = keycode
 	event.pressed = true
 	Input.parse_input_event(event)
+
+
+## Sends a real left click through the viewport GUI, exactly like a mouse or a
+## touch tap would.
+func _click(position: Vector2) -> void:
+	var motion := InputEventMouseMotion.new()
+	motion.position = position
+	motion.global_position = position
+	get_viewport().push_input(motion, true)
+	for pressed in [true, false]:
+		var event := InputEventMouseButton.new()
+		event.button_index = MOUSE_BUTTON_LEFT
+		event.button_mask = MOUSE_BUTTON_MASK_LEFT if pressed else 0
+		event.pressed = pressed
+		event.position = position
+		event.global_position = position
+		get_viewport().push_input(event, true)
 
 
 func _finish() -> void:
