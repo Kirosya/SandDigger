@@ -1,6 +1,6 @@
 extends Node
-## Main menu smoke test: buttons exist, Host/Join open the Phase 3 notice,
-## Esc closes it, and the settings panel applies + persists values.
+## Main menu smoke test: buttons exist, Host opens an ENet session, Join opens
+## the address dialog, and the settings panel applies + persists values.
 ##
 ## Run headless: godot --headless --path . res://tests/menu_test.tscn
 
@@ -24,24 +24,19 @@ func _ready() -> void:
 
 	menu.get_node("Menu/Host").pressed.emit()
 	await get_tree().process_frame
-	_check("host opens modal", menu.get_node("Modal").visible)
-	_check("host modal title", menu.get_node("Modal/Panel/Margin/VBox/Title").text == "Host Game")
-	_check("host modal mentions Phase 3", "Phase 3" in menu.get_node("Modal/Panel/Margin/VBox/Body").text)
-
-	menu.get_node("Modal/Panel/Margin/VBox/Close").pressed.emit()
-	_check("back closes modal", not menu.get_node("Modal").visible)
+	_check("host starts a session", Net.is_online() and Net.hosting)
+	Net.leave()
+	await get_tree().process_frame
+	_check("leaving clears the session", not Net.is_online())
 
 	menu.get_node("Menu/Join").pressed.emit()
 	await get_tree().process_frame
-	_check("join opens modal", menu.get_node("Modal").visible)
-	_check("join modal title", menu.get_node("Modal/Panel/Margin/VBox/Title").text == "Join Game")
-
-	var cancel := InputEventAction.new()
-	cancel.action = "ui_cancel"
-	cancel.pressed = true
-	Input.parse_input_event(cancel)
+	var dialog := menu.get_node_or_null("JoinDialog") as AcceptDialog
+	_check("join opens the address dialog", dialog != null and dialog.visible)
+	if dialog != null:
+		dialog.hide()
 	await get_tree().process_frame
-	_check("esc closes modal", not menu.get_node("Modal").visible)
+	_check("join dialog closes", dialog == null or not dialog.visible)
 
 	menu.get_node("Menu/Settings").pressed.emit()
 	await get_tree().process_frame

@@ -35,6 +35,19 @@ const TOOL_DETECTOR := 1
 ## Emitted when Q swaps the hand between the shovel and the detector.
 signal tool_mode_changed(mode: int)
 
+## The player id this body belongs to (the host is 1, clients get their peer id).
+var player_id: int = 1
+
+## Where the owner's latest streamed transform wants this body to be.
+var _net_target_position := Vector3.ZERO
+var _net_target_yaw := 0.0
+var _net_target_pitch := 0.0
+var _has_net_target := false
+var _net_stream_timer := 0.0
+
+## 15 Hz is enough for a beach stroll and keeps the packet rate low.
+const NET_STREAM_INTERVAL := 1.0 / 15.0
+
 @onready var head: Node3D = $Head
 @onready var camera: Camera3D = $Head/Camera3D
 @onready var spoon_pivot: Node3D = $Head/Camera3D/SpoonPivot
@@ -57,6 +70,15 @@ func _ready() -> void:
 	add_to_group("player")
 	global_position = spawn_point
 	mouse_sensitivity = GameSettings.mouse_sensitivity
+
+	var state := get_node_or_null("PlayerState") as PlayerState
+	if state != null:
+		state.player_id = player_id
+
+	if not is_local_player():
+		_setup_remote()
+		return
+
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	_set_layers_recursive(spoon_pivot, VIEWMODEL_LAYER)
 	_set_layers_recursive(detector_pivot, VIEWMODEL_LAYER)
@@ -66,12 +88,37 @@ func _ready() -> void:
 	if third_camera != null:
 		third_camera.current = false
 
-	var state := get_node_or_null("PlayerState") as PlayerState
 	if state != null:
 		state.equipment_changed.connect(apply_equipment)
 		state.inventory_changed.connect(_on_inventory_changed)
 		apply_equipment(state.get_current_equipment())
 	_update_hand_visuals()
+
+
+## True on the machine that owns this body (always true in single player).
+func is_local_player() -> bool:
+	if not Net.is_online():
+		return true
+	return multiplayer.get_unique_id() == get_multiplayer_authority()
+
+
+## Someone else's body: no input, no camera, no floating first-person hands, and
+## it follows the transform streamed by its owner instead of simulating physics.
+func _setup_remote() -> void:
+	set_physics_process(false)
+	set_process_unhandled_input(false)
+	set_process(true)
+	camera.current = false
+	if third_camera != null:
+		third_camera.current = false
+	spoon_pivot.visible = false
+	detector_pivot.visible = false
+	item_pivot.visible = false
+	if rig != null:
+		# The owner hides their own body on layer 2 so their camera never sees it;
+		# everybody else must see it, so move it to the default layer.
+		_set_layers_recursive(rig, 1)
+		rig.set_viewmodel_visible(false)
 
 
 ## Grows the held tool with the tier. The hand end of the handle stays put and
@@ -183,6 +230,10 @@ func _unhandled_input(event: InputEvent) -> void:
 
 
 func _process(delta: float) -> void:
+	if not is_local_player():
+		_interpolate_remote(delta)
+		return
+
 	# Arrow keys: left/right turn the body, up/down tilt the head.
 	var turn := Input.get_axis("cam_left", "cam_right")
 	var tilt := Input.get_axis("cam_down", "cam_up")
@@ -203,6 +254,8 @@ func _process(delta: float) -> void:
 
 
 func _physics_process(delta: float) -> void:
+	if not is_local_player():
+		return
 	if not is_on_floor():
 		velocity.y -= _gravity * delta
 	if Input.is_action_just_pressed("jump") and is_on_floor():
@@ -224,6 +277,65 @@ func _physics_process(delta: float) -> void:
 	# Safety net: fell off the beach or waded out past the sea floor.
 	if global_position.y < -3.5:
 		respawn()
+
+	_net_stream_timer -= delta
+	if _net_stream_timer <= 0.0:
+		_net_stream_timer = NET_STREAM_INTERVAL
+		if Net.is_online():
+			_send_net_state()
+
+
+## Streams this body to everyone who can see it. A client only talks to the
+## host; the host relays to the other clients, so nobody gets RPCs for a node
+## that has not been spawned on their machine yet.
+func _send_net_state() -> void:
+	if Net.is_host():
+		for id in Net.ready_peers:
+			rpc_id(id, "_net_state", global_position, rotation.y, head.rotation.x)
+	else:
+		rpc_id(1, "_net_state", global_position, rotation.y, head.rotation.x)
+
+
+## The owner streams where it is and where it looks; everyone else smooths
+## toward that instead of running a second physics body.
+@rpc("any_peer", "unreliable_ordered", "call_remote")
+func _net_state(position: Vector3, yaw: float, pitch: float) -> void:
+	if is_local_player():
+		return
+	var sender := multiplayer.get_remote_sender_id()
+	if sender != get_multiplayer_authority():
+		return
+	_apply_net_state(position, yaw, pitch)
+	# Host relay: with three or four players the others need to see this too.
+	if Net.is_host() and sender != 1:
+		for id in Net.ready_peers:
+			if id != sender:
+				rpc_id(id, "_net_state_relay", player_id, position, yaw, pitch)
+
+
+@rpc("any_peer", "unreliable_ordered", "call_remote")
+func _net_state_relay(relayed_id: int, position: Vector3, yaw: float, pitch: float) -> void:
+	if multiplayer.get_remote_sender_id() != 1:
+		return
+	if relayed_id != player_id:
+		return
+	_apply_net_state(position, yaw, pitch)
+
+
+func _apply_net_state(position: Vector3, yaw: float, pitch: float) -> void:
+	_net_target_position = position
+	_net_target_yaw = yaw
+	_net_target_pitch = pitch
+	_has_net_target = true
+
+
+func _interpolate_remote(delta: float) -> void:
+	if not _has_net_target:
+		return
+	var weight := minf(1.0, delta * 14.0)
+	global_position = global_position.lerp(_net_target_position, weight)
+	rotation.y = lerp_angle(rotation.y, _net_target_yaw, weight)
+	head.rotation.x = lerp_angle(head.rotation.x, _net_target_pitch, weight)
 
 
 func respawn() -> void:

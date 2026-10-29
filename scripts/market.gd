@@ -25,8 +25,8 @@ func _ready() -> void:
 ## Opens the shop panel for the local player.
 func open_shop() -> void:
 	var shop := get_tree().get_first_node_in_group("shop_ui") as ShopUI
-	var state := get_tree().get_first_node_in_group("player_state") as PlayerState
-	var player := get_tree().get_first_node_in_group("player") as Node3D
+	var state := Net.local_state()
+	var player := Net.local_player() as Node3D
 	if shop != null and state != null:
 		shop.open(state, player)
 

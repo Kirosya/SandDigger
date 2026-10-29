@@ -78,6 +78,15 @@ func set_tool_pivot(pivot: Node3D, right_grip_z: float = RIGHT_GRIP_Z,
 	_place_arms()
 
 
+## Remote players are watched from outside, so their floating first-person hands
+## are switched off. Their body stays visible on the default layer.
+func set_viewmodel_visible(on: bool) -> void:
+	if _right_arm != null:
+		_right_arm.visible = on
+	if _left_arm != null:
+		_left_arm.visible = on
+
+
 func _process(_delta: float) -> void:
 	_place_arms()
 

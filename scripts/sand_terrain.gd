@@ -154,6 +154,106 @@ func dig_at(world_pos: Vector3, radius: float, depth: float) -> float:
 	return dug_volume
 
 
+## --- Multiplayer ---------------------------------------------------------
+
+## How far a dig request may land from the player who sent it. A little over the
+## local DIG_REACH so a small position desync never rejects a legitimate dig.
+const MAX_DIG_DISTANCE := 6.0
+
+var _dig_stamps: Dictionary = {}
+
+
+## Offline or host: this machine owns the sand. Clients only mirror it.
+func is_authority() -> bool:
+	return Net.is_host()
+
+
+func export_heights() -> PackedFloat32Array:
+	return heights.duplicate()
+
+
+## Replaces the whole heightmap (late join) and rebuilds every chunk once.
+func set_heights(data: PackedFloat32Array) -> void:
+	if data.size() != heights.size():
+		push_warning("set_heights: size mismatch %d != %d" % [data.size(), heights.size()])
+		return
+	heights = data.duplicate()
+	rebuild_mesh(Rect2i(0, 0, GRID_SIZE, GRID_SIZE))
+	_sync_collision()
+
+
+## Entry point for a player's shovel. The host carves the sand and broadcasts;
+## a client only asks the host and lets the broadcast carve its copy.
+func submit_dig(world_position: Vector3, player_id: int, tier_index: int) -> void:
+	if not Net.is_online() or Net.is_host():
+		host_dig(world_position, player_id, tier_index)
+	else:
+		rpc_id(1, "request_dig", world_position, player_id, tier_index)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func request_dig(world_position: Vector3, player_id: int, tier_index: int) -> void:
+	if not Net.is_host():
+		print("[dig] request ignored: not host")
+		return
+	if multiplayer.get_remote_sender_id() != player_id:
+		print("[dig] request rejected: sender %d != player %d" % [multiplayer.get_remote_sender_id(), player_id])
+		return
+	var now := Time.get_ticks_msec()
+	if now - int(_dig_stamps.get(player_id, -100000)) < 120:
+		print("[dig] request rejected: cooldown")
+		return
+	_dig_stamps[player_id] = now
+	var player := Net.player_by_id(player_id)
+	if player == null:
+		print("[dig] request rejected: no player %d" % player_id)
+		return
+	var distance := player.global_position.distance_to(world_position)
+	if distance > MAX_DIG_DISTANCE:
+		print("[dig] request rejected: %.2f m away" % distance)
+		return
+	host_dig(world_position, player_id, tier_index)
+
+
+## Carves the sand for `player_id`, tells every peer, and awards the XP.
+func host_dig(world_position: Vector3, player_id: int, tier_index: int) -> float:
+	var state := _state_for(player_id)
+	var tiers := EquipmentData.default_tiers()
+	var equipment: EquipmentData = tiers[clampi(tier_index, 0, tiers.size() - 1)]
+	var volume := dig_at(world_position, equipment.radius, equipment.depth)
+	if volume <= 0.0:
+		return 0.0
+	if Net.is_online():
+		rpc("apply_dig", world_position, equipment.radius, equipment.depth)
+	if state != null:
+		state.add_dig_volume(volume)
+		if Net.is_online() and player_id != multiplayer.get_unique_id():
+			rpc_id(player_id, "grant_xp", volume)
+	return volume
+
+
+## Clients carve the same bowl the host carved. Deterministic: same heights,
+## same radius, same depth.
+@rpc("authority", "call_remote", "reliable")
+func apply_dig(world_position: Vector3, radius: float, depth: float) -> void:
+	dig_at(world_position, radius, depth)
+
+
+## The host computed this XP from the dig it accepted.
+@rpc("authority", "call_remote", "reliable")
+func grant_xp(volume: float) -> void:
+	var state := Net.local_state()
+	if state != null:
+		state.add_dig_volume(volume)
+
+
+func _state_for(player_id: int) -> PlayerState:
+	var player := Net.player_by_id(player_id)
+	if player == null:
+		return null
+	return player.get_node_or_null("PlayerState") as PlayerState
+
+
 ## Height of the sand surface at `world_pos` (bilinear between grid points).
 ## Returns 0.0 outside the grid.
 func get_height_at(world_pos: Vector3) -> float:

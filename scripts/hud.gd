@@ -368,9 +368,16 @@ func _pulse_edge(strength: float) -> void:
 
 
 func _bind() -> void:
-	_player = get_tree().get_first_node_in_group("player_state") as PlayerState
 	_loot = get_tree().get_first_node_in_group("loot_manager") as LootManager
-	_player_node = get_tree().get_first_node_in_group("player") as FirstPersonPlayer
+	if _player != null:
+		return
+	# In multiplayer there is one PlayerState per player; the HUD only ever
+	# shows the one belonging to the body this machine controls.
+	var local := Net.local_player()
+	if local == null:
+		return
+	_player_node = local
+	_player = local.get_node_or_null("PlayerState") as PlayerState
 	if _player != null:
 		_player.xp_changed.connect(_on_any_changed)
 		_player.money_changed.connect(_on_money_changed)
@@ -384,6 +391,9 @@ func _bind() -> void:
 
 
 func _process(delta: float) -> void:
+	if _player == null:
+		# The local player is spawned a few frames after the beach on a client.
+		_bind()
 	if _flash_time > 0.0:
 		_flash_time -= delta
 		_flash.modulate.a = clampf(_flash_time / 0.4, 0.0, 1.0)
@@ -470,12 +480,9 @@ func set_detector_status(text: String) -> void:
 
 ## 0..1 reading of how close the nearest unclaimed junk is.
 func detector_strength() -> float:
-	if _loot == null:
+	if _loot == null or _player_node == null:
 		return 0.0
-	var player := get_tree().get_first_node_in_group("player") as Node3D
-	if player == null:
-		return 0.0
-	return _loot.signal_strength(player.global_position)
+	return _loot.signal_strength(_player_node.global_position)
 
 
 func _fire_ping() -> void:

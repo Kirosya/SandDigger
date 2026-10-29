@@ -9,8 +9,9 @@ extends Node
 ## rests on / follows the new surface. Surface junk sits on top of the sand and
 ## follows the terrain down if a player digs underneath it.
 ##
-## Claiming is first-come-first-served through take_loot(), which is the same
-## contract the host will validate in Phase 3 (second claim is rejected).
+## Claiming is first-come-first-served. Offline the local player decides; online
+## the host serialises every claim and broadcasts the winner, so two players
+## digging up the same ring can never both get it.
 
 signal loot_revealed(item: Dictionary)
 signal loot_claimed(item: Dictionary)
@@ -69,6 +70,9 @@ const SEA_MAX_FLOATING := 6
 ## Total tide-delivered junk allowed in the world (stops the beach silting up).
 const SEA_MAX_TOTAL := 40
 const SEA_DRIFT_SPEED := 0.7
+## Floating junk is owned by the host; it streams its position to clients at
+## this rate (only a handful of items are ever in the surf at once).
+const FLOAT_SYNC_INTERVAL := 0.2
 ## Loot never spawns further out than this (Z); the sand below it is under water
 ## (or gets wet at high tide).
 const DRY_LIMIT_Z := -10.5
@@ -112,7 +116,6 @@ class LootItem:
 var loot: Array[LootItem] = []
 
 var _terrain: SandTerrain
-var _player: PlayerState
 var _root: Node3D
 var _next_id := 1
 var _materials: Dictionary = {}
@@ -120,6 +123,7 @@ var _rng := RandomNumberGenerator.new()
 var _noise_rng := RandomNumberGenerator.new()
 var _sea: Sea
 var _sea_spawn_timer := 2.0
+var _float_sync_timer := 0.0
 
 
 func _ready() -> void:
@@ -138,6 +142,9 @@ func _process(delta: float) -> void:
 		_sea = get_tree().get_first_node_in_group("sea") as Sea
 		if _sea == null:
 			return
+	# Only the host runs the tide and the drifting junk; clients get the results.
+	if not is_authority():
+		return
 	_drift_floating(delta)
 	if not _sea.rising:
 		return
@@ -150,34 +157,180 @@ func _process(delta: float) -> void:
 	_spawn_sea_trash()
 
 
-## First claim wins. Returns false when the item is unknown, still buried, or
-## already owned by another player.
+## --- Claiming ------------------------------------------------------------
+##
+## First claim wins, and the host is the only one that decides. Offline and on
+## the host this answers immediately; a client asks and lets the broadcast do
+## the bookkeeping. Returns false when the claim was rejected on this machine.
+
+## A claim request is only honoured when the player is actually standing next to
+## the item; the client checks the same range before asking.
+const CLAIM_RANGE := 4.0
+
+
+func is_authority() -> bool:
+	return Net.is_host()
+
+
 func take_loot(loot_id: int, player_id: int) -> bool:
+	if is_authority():
+		return _host_claim(loot_id, player_id)
+	rpc_id(1, "_request_claim", loot_id, player_id)
+	return true
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func _request_claim(loot_id: int, player_id: int) -> void:
+	if not is_authority():
+		return
+	if multiplayer.get_remote_sender_id() != player_id:
+		return
+	var player := Net.player_by_id(player_id)
+	var item := find_loot(loot_id)
+	if player == null or item == null:
+		return
+	if player.global_position.distance_to(item.buried_position) > CLAIM_RANGE:
+		return
+	_host_claim(loot_id, player_id)
+
+
+## Host side: serialise the claim, tell everyone, and put the item in the bag of
+## the player who got it.
+func _host_claim(loot_id: int, player_id: int) -> bool:
 	var item := find_loot(loot_id)
 	if item == null or item.claimed or not item.revealed:
 		return false
 	if item.owner_id != 0:
 		return false
-	if _player == null:
-		_player = get_tree().get_first_node_in_group("player_state") as PlayerState
-	# A full bag must not claim the item: it has to stay in the world for later.
-	if _player != null and _player.is_inventory_full():
-		return false
 	item.owner_id = player_id
 	item.claimed = true
-	if _player != null:
-		_player.add_loot({
-			"id": item.loot_id,
-			"name": item.display_name,
-			"kind": item.kind,
-			"value": item.value,
-		})
+	if Net.is_online():
+		rpc("_client_claim", loot_id, player_id)
+	_apply_claim(item, player_id)
+	return true
+
+
+@rpc("authority", "call_remote", "reliable")
+func _client_claim(loot_id: int, player_id: int) -> void:
+	var item := find_loot(loot_id)
+	if item == null:
+		return
+	item.owner_id = player_id
+	item.claimed = true
+	_apply_claim(item, player_id)
+
+
+## Drops the visual everywhere; only the claimer's own machine stores it in the
+## bag, because that is where their bag lives.
+func _apply_claim(item: LootItem, player_id: int) -> void:
 	if item.node != null:
 		item.node.queue_free()
 		item.node = null
+	if not Net.is_online() or player_id == Net.local_id:
+		var state := Net.local_state()
+		if state != null:
+			state.add_loot({
+				"id": item.loot_id,
+				"name": item.display_name,
+				"kind": item.kind,
+				"value": item.value,
+			})
 	print("[loot] claimed '%s' ($%d) by player %d" % [item.display_name, int(item.value), player_id])
 	loot_claimed.emit(_describe(item))
-	return true
+
+
+## --- Late join ------------------------------------------------------------
+##
+## The base scatter is generated from a fixed seed, so every peer already has
+## the same 200+ items. A late joiner only needs what changed since: the claims
+## and the junk the tide floated in.
+
+func export_snapshot() -> Dictionary:
+	var claimed := PackedInt32Array()
+	var sea: Array[Dictionary] = []
+	for item in loot:
+		if item.claimed:
+			claimed.append(item.loot_id)
+		elif item.from_sea:
+			sea.append(_pack_sea(item))
+	return {"claimed": claimed, "sea": sea}
+
+
+func apply_snapshot(data: Dictionary) -> void:
+	var claimed: PackedInt32Array = data.get("claimed", PackedInt32Array())
+	for id in claimed:
+		var item := find_loot(int(id))
+		if item == null:
+			continue
+		item.claimed = true
+		item.owner_id = 1
+		if item.node != null:
+			item.node.queue_free()
+			item.node = null
+	for entry in data.get("sea", []):
+		_add_sea_item(entry)
+
+
+func _pack_sea(item: LootItem) -> Dictionary:
+	return {
+		"id": item.loot_id,
+		"name": item.display_name,
+		"value": item.value,
+		"pos": item.buried_position,
+		"target": item.drift_target,
+		"floating": item.floating,
+	}
+
+
+func _add_sea_item(entry: Dictionary) -> void:
+	var id := int(entry.get("id", 0))
+	if id <= 0 or find_loot(id) != null:
+		return
+	var item := LootItem.new()
+	item.loot_id = id
+	_next_id = maxi(_next_id, id + 1)
+	item.kind = "trash"
+	item.display_name = str(entry.get("name", "Driftwood"))
+	item.value = float(entry.get("value", 10.0))
+	item.on_surface = true
+	item.revealed = true
+	item.from_sea = true
+	item.floating = bool(entry.get("floating", false))
+	item.buried_position = entry.get("pos", Vector3.ZERO)
+	item.drift_target = entry.get("target", item.buried_position)
+	item.node = _make_visual(item)
+	if item.floating:
+		item.node.position = item.buried_position + Vector3(0.0, 0.1, 0.0)
+	else:
+		item.node.position = Vector3(item.buried_position.x, 0.0, item.buried_position.z)
+		_place_on_surface(item)
+	loot.append(item)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _client_add_sea(entry: Dictionary) -> void:
+	_add_sea_item(entry)
+
+
+@rpc("authority", "call_remote", "unreliable_ordered")
+func _client_float(loot_id: int, pos: Vector3) -> void:
+	var item := find_loot(loot_id)
+	if item == null or not item.floating or item.node == null:
+		return
+	item.node.position = pos
+	item.buried_position = Vector3(pos.x, 0.0, pos.z)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _client_beach(loot_id: int, pos: Vector3) -> void:
+	var item := find_loot(loot_id)
+	if item == null:
+		return
+	item.floating = false
+	item.buried_position = pos
+	if item.node != null:
+		item.node.position = Vector3(pos.x, 0.0, pos.z)
+	_place_on_surface(item)
 
 
 func find_loot(loot_id: int) -> LootItem:
@@ -268,7 +421,9 @@ func metal_noise(from: Vector3) -> float:
 
 
 func _spawn_loot() -> void:
-	_rng.randomize()
+	# A fixed seed: every peer generates the exact same beach, so a late join
+	# only needs the claims and the tide trash, not 210 item positions.
+	_rng.seed = 20261029
 	_noise_rng.randomize()
 	var placed: Array[Vector2] = []
 	# Starter ring: junk is already lying around when the player spawns.
@@ -376,10 +531,16 @@ func _spawn_sea_trash() -> LootItem:
 	item.node = _make_visual(item)
 	item.node.position = Vector3(x, _sea.level + 0.06, spawn_z)
 	loot.append(item)
+	if Net.is_online():
+		rpc("_client_add_sea", _pack_sea(item))
 	return item
 
 
 func _drift_floating(delta: float) -> void:
+	_float_sync_timer -= delta
+	var sync := Net.is_online() and _float_sync_timer <= 0.0
+	if sync:
+		_float_sync_timer = FLOAT_SYNC_INTERVAL
 	for item in loot:
 		if item.claimed or not item.floating or item.node == null:
 			continue
@@ -396,6 +557,8 @@ func _drift_floating(delta: float) -> void:
 		pos.y = _sea.level + 0.06 + sin(Time.get_ticks_msec() * 0.002 + float(item.loot_id)) * 0.04
 		item.node.position = pos
 		item.buried_position = Vector3(pos.x, 0.0, pos.z)
+		if sync:
+			rpc("_client_float", item.loot_id, pos)
 
 
 ## Turns a floating item into normal surface loot on the dry sand.
@@ -405,6 +568,8 @@ func _beach_sea_trash(item: LootItem) -> void:
 	if item.node != null:
 		item.node.position = Vector3(item.buried_position.x, 0.0, item.buried_position.z)
 	_place_on_surface(item)
+	if Net.is_online():
+		rpc("_client_beach", item.loot_id, item.buried_position)
 	print("[sea] '%s' washed ashore at %s" % [item.display_name, str(item.buried_position)])
 
 

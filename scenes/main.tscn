@@ -59,8 +59,7 @@ script = ExtResource("10_sea")
 [node name="CoastalScenery" type="Node3D" parent="."]
 script = ExtResource("11_scenery")
 
-[node name="Player" parent="." unique_id=675574756 instance=ExtResource("3_player")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.2, 6)
+[node name="Players" type="Node3D" parent="."]
 
 [node name="LootManager" type="Node" parent="." unique_id=1560927488]
 script = ExtResource("4_loot")

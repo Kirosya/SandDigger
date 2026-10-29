@@ -45,6 +45,11 @@ func _ready() -> void:
 		set_process_unhandled_input(false)
 		set_process(false)
 		return
+	# Only the machine that owns this body may dig, loot or sell with it.
+	if not _player_body.is_local_player():
+		set_process(false)
+		set_process_unhandled_input(false)
+		return
 	_resolve_world()
 
 
@@ -55,10 +60,13 @@ func _resolve_world() -> void:
 		_terrain = get_tree().get_first_node_in_group("sand_terrain") as SandTerrain
 	if _loot == null:
 		_loot = get_tree().get_first_node_in_group("loot_manager") as LootManager
+		if _loot != null and not _loot.loot_claimed.is_connected(_on_loot_claimed):
+			_loot.loot_claimed.connect(_on_loot_claimed)
 	if _hud == null:
 		_hud = get_tree().get_first_node_in_group("hud") as Hud
-	if _state == null:
-		_state = get_tree().get_first_node_in_group("player_state") as PlayerState
+	if _state == null and _player_body != null:
+		# This player's own progression, never another player's.
+		_state = _player_body.get_node_or_null("PlayerState") as PlayerState
 	if _market == null:
 		_market = get_tree().get_first_node_in_group("market") as Market
 
@@ -135,17 +143,14 @@ func _try_dig() -> void:
 
 	var equipment := _state.get_current_equipment()
 	var world_position: Vector3 = hit["position"]
-	var volume := _terrain.dig_at(world_position, equipment.radius, equipment.depth)
-	if volume <= 0.0:
-		return
-
-	var xp_gained := _state.add_dig_volume(volume)
-	_total_dug += volume
+	# The host carves and broadcasts; a client only asks and lets the broadcast
+	# carve its own copy, so every beach ends up identical.
+	_terrain.submit_dig(world_position, _state.player_id, equipment.tier_index)
 	_dig_count += 1
 	if _player_body.has_method("play_dig_swing"):
 		_player_body.play_dig_swing()
-	print("[dig] p%d %s vol=%.4f xp=+%.1f total=%.3f m3" % [
-		_state.player_id, equipment.display_name, volume, xp_gained, _total_dug])
+	print("[dig] p%d %s at %s" % [
+		_state.player_id, equipment.display_name, str(world_position)])
 
 
 func _interact() -> void:
@@ -171,12 +176,18 @@ func _interact() -> void:
 				_flash_hud("Bag full (%d/%d) - sell something first" % [
 					PlayerState.INVENTORY_SLOTS, PlayerState.INVENTORY_SLOTS])
 				return
-			if _loot.take_loot(item.loot_id, _state.player_id):
-				_flash_hud("Picked up %s  ($%d)  -  bag %d/%d" % [
-					item.display_name, int(item.value),
-					_state.carried_count(), PlayerState.INVENTORY_SLOTS])
-			else:
+			# The host decides who got it; the "Picked up" line comes from the
+			# claim broadcast so every peer tells the same story.
+			if not _loot.take_loot(item.loot_id, _state.player_id):
 				_flash_hud("Too late - already claimed")
+
+
+func _on_loot_claimed(item: Dictionary) -> void:
+	if _state == null or int(item.get("owner", 0)) != _state.player_id:
+		return
+	_flash_hud("Picked up %s  ($%d)  -  bag %d/%d" % [
+		str(item.get("name", "loot")), int(item.get("value", 0)),
+		_state.carried_count(), PlayerState.INVENTORY_SLOTS])
 
 
 ## Puts the item in bag slot `index` in hand (pressing it again puts it away).
