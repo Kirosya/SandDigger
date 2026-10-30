@@ -19,6 +19,19 @@ const MENU_SCENE := "res://scenes/main_menu.tscn"
 ## one; true when the beach is the running game, which is when progress is saved.
 var _profile_enabled := false
 
+## True when this machine owns the beach it is walking on: single player, or the
+## host of a session. Clients receive the world in their snapshot and never read
+## or write the local beach file, so a guest cannot overwrite the host's island.
+var _owns_world := false
+## Set by digs and by loot changes; the saved beach is only rewritten when
+## something actually changed.
+var _world_dirty := false
+var _world_save_timer := 0.0
+
+## How often a changed beach is written while playing. Digging every shovelful
+## would be wasteful, but waiting for a clean exit loses the session on a crash.
+const WORLD_AUTOSAVE_SECONDS := 20.0
+
 
 func _ready() -> void:
 	_sun.rotation_degrees = Vector3(-55.0, 28.0, 0.0)
@@ -26,9 +39,12 @@ func _ready() -> void:
 	# Only the real game touches the saved profile. Tests instantiate main.tscn
 	# inside their own scene, so current_scene is the test node there.
 	_profile_enabled = get_tree().current_scene == self
+	_owns_world = Net.is_host()
 	_wire_loot_announcements()
 	_wire_tide()
 	_wire_dig_feedback()
+	_wire_world_tracking()
+	_load_world()
 	_start_session()
 
 
@@ -165,13 +181,81 @@ func _save_profile(_money: float) -> void:
 		Profile.save_state(state)
 
 
-## Leaving the beach (to the menu or out of the game) flushes the profile.
+## Leaving the beach (to the menu or out of the game) flushes the profile and,
+## on the world owner, the dug beach.
 func _exit_tree() -> void:
 	if not _profile_enabled:
 		return
 	var state := Net.local_state()
 	if state != null:
 		Profile.save_state(state)
+	_save_world()
+
+
+## --- Saved beach ----------------------------------------------------------
+##
+## The heightmap and the changed loot belong to the world owner. Restoring them
+## happens before the first player spawns, so nobody ever sees the pristine beach
+## for a frame and then watches it change.
+
+func _wire_world_tracking() -> void:
+	if _terrain != null:
+		_terrain.dug.connect(_on_world_dug)
+	if _loot != null:
+		_loot.world_changed.connect(_on_loot_world_changed)
+
+
+func _on_world_dug(_position: Vector3, _radius: float, _depth: float) -> void:
+	_world_dirty = true
+
+
+func _on_loot_world_changed() -> void:
+	# Loot changes are saved at once rather than on the dig timer: the bag is
+	# written the moment an item is picked up, so a crash in between must not
+	# leave the same item both in the bag and back in the sand.
+	_world_dirty = true
+	_save_world()
+
+
+func _process(delta: float) -> void:
+	if not _world_dirty or not _profile_enabled or not _owns_world:
+		return
+	_world_save_timer += delta
+	if _world_save_timer < WORLD_AUTOSAVE_SECONDS:
+		return
+	_save_world()
+
+
+## Loads this machine's saved beach, if it owns one. A missing or damaged file
+## simply leaves the freshly generated beach in place.
+func _load_world() -> void:
+	if not _profile_enabled or not _owns_world or _terrain == null:
+		return
+	var data := Profile.load_world()
+	if data.is_empty():
+		return
+	var heights: PackedFloat32Array = data.get("heights", PackedFloat32Array())
+	if heights.size() != _terrain.heights.size():
+		return
+	_terrain.set_heights(heights)
+	var loot_data: Dictionary = data.get("loot", {})
+	if _loot != null:
+		_loot.restore_world(loot_data)
+	print("[beach] restored %d heights, %d claimed items, %d tide items" % [
+		heights.size(), loot_data.get("claimed", []).size(), loot_data.get("sea", []).size()])
+
+
+## Writes the beach once the world owner has changed it. Clients never get here:
+## their beach is a mirror of the host's and would only be a stale copy.
+func _save_world() -> void:
+	if not _profile_enabled or not _owns_world or _terrain == null:
+		return
+	_world_save_timer = 0.0
+	var loot_data := _loot.export_snapshot() if _loot != null else {}
+	# Only clear the dirty flag once the bytes are actually on disk, so a failed
+	# write (a lock, a full disk) is retried on the next autosave tick.
+	if Profile.save_world(_terrain.export_heights(), loot_data):
+		_world_dirty = false
 
 
 func _on_peer_joined(_peer_id: int) -> void:

@@ -1,8 +1,8 @@
-# Sound, feedback and the saved profile
+# Sound, feedback, the saved profile and the saved beach
 
 Phase 4 gives the beach a voice and makes progress survive a restart. Both systems are
 deliberately small: no third-party assets, no new network messages, and a single save
-file per machine.
+file per machine (two once the beach itself is persisted).
 
 ## Sounds
 
@@ -59,7 +59,8 @@ One profile per machine, at `user://profile.cfg` (Windows:
 - equipment tier index and whether the detector was bought,
 - the 7 bag slots, item ids/names/kinds/values included.
 
-The beach itself is regenerated every launch; only progress is persisted.
+The beach itself is now saved as well, in a second file next to the profile
+(`user://beach.save`, see the next section).
 
 `scripts/main.gd` restores the profile into the player **this machine controls** (host or
 client — every peer keeps its own `PlayerState`), and saves again on the events that
@@ -76,11 +77,50 @@ list, so editing the file cannot hand out a shovel that was never earned.
 One machine, one beachcomber. A per-Steam-account profile would only change the section
 key (`steam_<id>`), not the format, whenever that becomes worth doing.
 
+## The saved beach
+
+A dug beach has to still be dug tomorrow, so the heightmap and the changed loot live in
+`user://beach.save`. Only the machine that **owns the world** reads or writes it:
+
+- single player and the host load and save it,
+- a client never touches it — its beach arrives in the host's late-join snapshot, so a
+  guest can never overwrite the host's island with a stale copy.
+
+`scripts/beach_store.gd` holds the format. The 128×128 heightmap (64 KB raw) and a
+`var_to_bytes` loot snapshot are both zstd-compressed behind a small header
+(magic, version, vertex count, blob lengths). A beach dug all over still saves in well
+under a kilobyte, so writing it is cheap enough to do without hitching:
+
+| when | what |
+| --- | --- |
+| on start, before the first player spawns | restore the heightmap and re-derive what is uncovered |
+| 20 s after the first dig or loot change | autosave, so a crash does not erase the session |
+| on leaving the beach / quitting | final flush next to the profile flush |
+
+Restoring is not just "load the heights": `LootManager.restore_world()` re-derives every
+item's state from the new sand. Anything the sand has been dug past is revealed again
+(silently — a reloaded beach must not replay a dozen "Uncovered!" announcements), surface
+junk is set back onto the new surface, and the saved claims remove what was taken. Without
+that a reloaded beach would keep its holes but hide every already-dug ring again.
+
+Loading is as defensive as the profile. A wrong magic, an unknown version, a truncated or
+random file, a decompression failure or a wrong vertex count all mean "no beach": the game
+keeps the freshly generated one. Heights are clamped to the beach's real range (sea floor
+to flat sand), so even a hand-edited save can only make holes, never spikes.
+
+The loot snapshot is deliberately minimal — claimed ids plus the tide-spawned items. The
+200-item scatter comes from a fixed seed on every peer, so it never needs saving; revealed
+state is recomputed from the sand instead of trusted.
+
+`Profile.world_path_override` points the tests at a scratch file, and `beach_test` drives
+the real `main._save_world()` / `main._load_world()` path rather than re-implementing it.
+
 ## Tests
 
 ```
 godot --headless --path . res://tests/sfx_test.tscn       # streams, tier->sound, puffs, buttons, surf
 godot --headless --path . res://tests/profile_test.tscn   # round trip, damaged files, derived values, bag
+godot --headless --path . res://tests/beach_test.tscn     # save/restore a real dug beach, damaged files
 ```
 
 Sound output cannot be heard headless, so the assertions check which stream was handed

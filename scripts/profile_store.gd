@@ -1,14 +1,18 @@
 extends Node
 ## Saves the local player's progress between sessions.
 ##
-## The beach is regenerated on every launch, but a beachcomber's XP, money and
-## equipment should survive. Only the state this machine owns is written: in
-## multiplayer every peer keeps its own `PlayerState`, so saving on each machine
-## is already the correct per-player behaviour and the host's world is untouched.
+## Two files are kept side by side:
+##   - `user://profile.cfg` (this file): XP, money, equipment and the bag. Every
+##     machine saves its own, host or client alike, because progression is
+##     per-player.
+##   - `user://beach.save` (BeachStore): the dug heightmap and the loot that has
+##     already been claimed or washed in. Only the world owner (single player or
+##     host) reads and writes this one; a client's beach comes from the host's
+##     snapshot instead, so a guest can never overwrite someone else's island.
 ##
-## The file is a plain ConfigFile at `user://profile.cfg`. One profile per
-## machine for now; the key is a constant so a per-Steam-account profile is just
-## a different key later (`steam_<id>`), with no format change.
+## The profile is a plain ConfigFile. One profile per machine for now; the key is
+## a constant so a per-Steam-account profile is just a different key later
+## (`steam_<id>`), with no format change.
 ##
 ## Loads are defensive: a missing, truncated or hand-edited file falls back to a
 ## fresh profile instead of blocking the game, and derived values (level, tier)
@@ -17,10 +21,12 @@ extends Node
 signal saved()
 
 const PATH := "user://profile.cfg"
+const WORLD_PATH := "user://beach.save"
 const PROFILE_KEY := "local"
 
-## Tests point this at a scratch file so they never touch the real profile.
+## Tests point these at scratch files so they never touch the real profile.
 var path_override := ""
+var world_path_override := ""
 
 var _loaded := false
 
@@ -105,6 +111,50 @@ func clear() -> void:
 
 func has_profile() -> bool:
 	return FileAccess.file_exists(profile_path())
+
+
+## --- The beach ------------------------------------------------------------
+
+func world_path() -> String:
+	return world_path_override if not world_path_override.is_empty() else WORLD_PATH
+
+
+## Writes the heightmap and the loot snapshot to disk in one atomic-ish go.
+## Returns false when the file could not be written.
+func save_world(heights: PackedFloat32Array, loot: Dictionary) -> bool:
+	var bytes := BeachStore.encode(heights, loot)
+	if bytes.is_empty():
+		return false
+	var file := FileAccess.open(world_path(), FileAccess.WRITE)
+	if file == null:
+		push_warning("[profile] could not write %s (err %d)" % [
+			world_path(), FileAccess.get_open_error()])
+		return false
+	file.store_buffer(bytes)
+	file.close()
+	return true
+
+
+## Reads the saved beach. Returns `{heights, loot}` or an empty Dictionary when
+## there is no usable file; callers then simply keep the freshly generated beach.
+func load_world() -> Dictionary:
+	if not FileAccess.file_exists(world_path()):
+		return {}
+	var file := FileAccess.open(world_path(), FileAccess.READ)
+	if file == null:
+		return {}
+	var bytes := file.get_buffer(file.get_length())
+	file.close()
+	return BeachStore.decode(bytes)
+
+
+func has_world() -> bool:
+	return FileAccess.file_exists(world_path())
+
+
+func clear_world() -> void:
+	if FileAccess.file_exists(world_path()):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(world_path()))
 
 
 func _read_bag(state: PlayerState, config: ConfigFile) -> void:

@@ -15,6 +15,9 @@ extends Node
 
 signal loot_revealed(item: Dictionary)
 signal loot_claimed(item: Dictionary)
+## Emitted when the loot in the world changes in a way worth saving (a claim, or
+## junk the tide just washed in). The beach saver listens to this, no extra RPC.
+signal world_changed()
 
 const SIGNAL_RANGE := 8.0
 ## Signal falls off quadratically so the detector is only "hot" when you are
@@ -207,6 +210,7 @@ func _host_claim(loot_id: int, player_id: int) -> bool:
 	if Net.is_online():
 		rpc("_client_claim", loot_id, player_id)
 	_apply_claim(item, player_id)
+	world_changed.emit()
 	return true
 
 
@@ -269,6 +273,31 @@ func apply_snapshot(data: Dictionary) -> void:
 			item.node = null
 	for entry in data.get("sea", []):
 		_add_sea_item(entry)
+
+
+## Rebuilds the visible loot after a saved beach has been restored.
+##
+## The heightmap is the source of truth for what is uncovered: any buried item
+## the sand has already been dug past is revealed again, surface junk is set back
+## onto the new surface, and the saved claims remove the loot that was taken.
+## Without this a reloaded beach would keep its holes but show every item as
+## still buried, so already-dug rings could never be picked up.
+func restore_world(snapshot: Dictionary) -> void:
+	if _terrain == null:
+		return
+	apply_snapshot(snapshot)
+	for item in loot:
+		if item.claimed or item.floating:
+			continue
+		if item.on_surface:
+			_place_on_surface(item)
+			continue
+		var height := _terrain.get_height_at(item.buried_position)
+		_set_buried_height(item, height)
+		if not item.revealed and height <= -item.depth + REVEAL_MARGIN:
+			# Silent: a restored beach must not replay a dozen "Uncovered!"
+			# announcements and pickup sounds all at once on load.
+			_reveal(item, height, false)
 
 
 func _pack_sea(item: LootItem) -> Dictionary:
@@ -533,6 +562,7 @@ func _spawn_sea_trash() -> LootItem:
 	loot.append(item)
 	if Net.is_online():
 		rpc("_client_add_sea", _pack_sea(item))
+	world_changed.emit()
 	return item
 
 
@@ -809,7 +839,7 @@ func _set_buried_height(item: LootItem, surface_height: float) -> void:
 	item.node.position.y = minf(-item.depth, surface_height + 0.02)
 
 
-func _reveal(item: LootItem, surface_height: float) -> void:
+func _reveal(item: LootItem, surface_height: float, announce := true) -> void:
 	item.revealed = true
 	if item.node == null:
 		return
@@ -827,7 +857,8 @@ func _reveal(item: LootItem, surface_height: float) -> void:
 	item.node.add_child(label)
 
 	print("[loot] revealed '%s' at %s" % [item.display_name, str(item.buried_position)])
-	loot_revealed.emit(_describe(item))
+	if announce:
+		loot_revealed.emit(_describe(item))
 
 
 func _describe(item: LootItem) -> Dictionary:
