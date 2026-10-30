@@ -19,6 +19,11 @@ signal detector_changed(detector_tier: int)
 signal leveled_up(new_level: int)
 ## Emitted when this player opens a buried treasure chest.
 signal treasure_found(finds: int, payout: float)
+## Emitted when the story quest chain moves: a finding was counted, or a quest
+## was completed and the next one became active.
+signal quest_changed(index: int, progress: int)
+## Emitted once per completed quest, with what it paid out.
+signal quest_completed(index: int, title: String, money: float, xp: float)
 
 ## XP awarded per cubic metre of removed sand. Tunable balance knob.
 const XP_PER_CUBIC_METER := 150.0
@@ -91,6 +96,19 @@ var has_detector: bool:
 ## find pays a fixed "legend" amount and the HUD likes to remember it.
 var treasure_finds: int = 0
 
+## --- Story quests ---------------------------------------------------------
+## The chain is per player and persisted. `quest_index` is the quest currently
+## being worked on (equal to the quest count once the story is finished) and
+## `quest_progress` counts the findings it still needs. The definitions live in
+## Quests, so the save only has to remember where this player got to.
+var quest_index: int = 0
+var quest_progress: int = 0
+## True once this player has brought the gold ring up, whether or not the quest
+## that asks for it was active at the time. There is only ever one ring, so the
+## last quest can never be completed twice and can never be blocked by an early
+## find.
+var gold_ring_found := false
+
 ## Ordered equipment chain for THIS player.
 var tiers: Array[EquipmentData] = []
 
@@ -152,6 +170,42 @@ func add_dig_volume(volume_m3: float) -> float:
 	_refresh_level()
 	xp_changed.emit(current_xp, current_level)
 	return gained
+
+
+## Adds earned XP directly (quest rewards, not dug volume). Returns the XP gained.
+func add_xp(amount: float) -> float:
+	if amount <= 0.0:
+		return 0.0
+	current_xp += amount
+	_refresh_level()
+	xp_changed.emit(current_xp, current_level)
+	return amount
+
+
+## --- Story quests ---------------------------------------------------------
+
+## Counts one finding toward the active quest and returns true when that was the
+## last one it needed. Quests owns the definitions, so the counting and the payout
+## are two calls; this one never pays anything by itself.
+func note_quest_find(count_needed: int) -> bool:
+	quest_progress += 1
+	if quest_progress < count_needed:
+		quest_changed.emit(quest_index, quest_progress)
+		return false
+	return true
+
+
+## Moves the chain on and pays a completed quest. Money and XP both go through
+## the usual emitters, so the HUD and the profile writer see a normal change.
+func complete_quest(index: int, title: String, money: float, xp: float) -> void:
+	quest_index = index + 1
+	quest_progress = 0
+	if money > 0.0:
+		add_money(money)
+	if xp > 0.0:
+		add_xp(xp)
+	quest_changed.emit(quest_index, quest_progress)
+	quest_completed.emit(index, title, money, xp)
 
 
 ## Total lifetime XP required to reach `level`. Level 1 starts at 0 XP.

@@ -156,6 +156,8 @@ func _wire_profile(player: FirstPersonPlayer) -> void:
 	state.detector_changed.connect(_on_detector_save)
 	state.carried_changed.connect(_on_carried_save)
 	state.treasure_found.connect(_on_treasure_save)
+	state.quest_changed.connect(_on_quest_progress_save)
+	state.quest_completed.connect(_on_quest_completed_save)
 
 
 func _on_level_up_save(_level: int) -> void:
@@ -171,6 +173,18 @@ func _on_detector_save(_detector_tier: int) -> void:
 
 
 func _on_carried_save(_count: int, _value: float) -> void:
+	_save_profile(0.0)
+
+
+## A completed quest moves the chain index and pays money and XP, both of which
+## belong in the profile: the story must not restart next session.
+func _on_quest_completed_save(_index: int, _title: String, _money: float, _xp: float) -> void:
+	_save_profile(0.0)
+
+
+## Half-finished quests are saved too, so a pickup counted toward "3 antiques"
+## survives a quit.
+func _on_quest_progress_save(_index: int, _progress: int) -> void:
 	_save_profile(0.0)
 
 
@@ -328,6 +342,22 @@ func _wire_loot_announcements() -> void:
 	if hud != null:
 		loot.loot_revealed.connect(_on_loot_revealed.bind(hud))
 		loot.treasure_opened.connect(_on_treasure_opened.bind(hud))
+		_wire_quests(hud)
+
+
+## A finished quest is worth its own fanfare, and the sound belongs on the peer
+## that actually completed it.
+func _wire_quests(hud: Hud) -> void:
+	var quests := get_tree().get_first_node_in_group("quests") as Quests
+	if quests == null:
+		return
+	quests.quest_completed.connect(_on_quest_completed.bind(hud))
+
+
+func _on_quest_completed(_index: int, title: String, money: float, xp: float,
+		hud: Hud) -> void:
+	# The HUD owns the banner, chime and payout line; no second fanfare here.
+	hud.announce_quest(title, int(money), int(xp))
 
 
 func _on_treasure_opened_sfx(item: Dictionary) -> void:

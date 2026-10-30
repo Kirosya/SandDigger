@@ -42,9 +42,12 @@ func _ready() -> void:
 
 	var digs := 0
 	var stage := 0
-	while digs < 40:
+	# The ring is the deepest item on the beach (RING_DEPTH), and sand caves in:
+	# reaching it takes a wide, patient excavation with a late-game shovel, not a
+	# fixed number of narrow scoops.
+	while digs < 400:
 		digs += 1
-		terrain.dig_at(spot, 0.45, 0.08)
+		terrain.dig_at(spot, 0.9, 0.3)
 		var surface := terrain.get_height_at(spot)
 		if stage == 0 and surface <= -ring.depth * 0.65:
 			stage = 1

@@ -26,8 +26,8 @@ func _ready() -> void:
 			break
 	if ring != null:
 		var digs := 0
-		while not ring.revealed and digs < 40:
-			terrain.dig_at(ring.buried_position, 0.5, 0.12)
+		while not ring.revealed and digs < 400:
+			terrain.dig_at(ring.buried_position, 0.9, 0.3)
 			digs += 1
 		player.global_position = ring.buried_position + Vector3(0.0, 0.2, 1.9)
 		player.head.rotation_degrees.x = -32.0

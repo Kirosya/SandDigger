@@ -221,13 +221,29 @@ the scatter lies in plain sight; everything else has a depth band:
 | kind | share of buried | depth | value |
 | --- | --- | --- | --- |
 | trash | ~88 % | 0.30-1.20 m | $18-40 |
-| gold ring | 9 % | 1.20-2.60 m | $150-320 |
 | antique | 3 % | 3.50-5.00 m | $400-700 |
+| gold ring | exactly 1 per beach | 5.20 m | $1500 |
 
 The antiques (Antique Amphora, Carved Idol, Bronze Lantern, Ancient Coin Hoard)
 are the reason to sink a real hole: they are metal, so the detector hears them,
 and they pay more than every junk item in the bag. They get their own banner and
 the `upgrade` chime on reveal.
+
+### The one gold ring
+
+There is exactly one gold ring on the whole beach, and it is the last story
+quest's target. The scatter still *rolls* a ring slot the way it always did (so
+the other 200 items keep their points, ids and depths, and a beach saved by an
+older build still lines up with its claims), but `LootManager._crown_gold_ring()`
+then keeps the **deepest** rolled ring, moves it down to `RING_DEPTH` (5.20 m) and
+makes it worth `RING_VALUE` ($1500). Every other rolled ring is turned back into
+ordinary junk with its own deterministic RNG (`seed 20261030`), so the main
+scatter stream is untouched and the beach can never hand out a second ring.
+`LootManager.gold_ring()` returns that item until somebody digs it up.
+
+5.20 m is deeper than any antique and only the later shovels keep a hole open
+that far, so the ring is a real endgame dig, not a lucky scoop.
+
 
 An item that the collapsing walls bury again goes back to "not revealed" and its
 label is removed (`LootManager.REBURY_MARGIN`), so a hole that fills in really
@@ -368,6 +384,39 @@ An unopened chest survives a restart with its position and payout, because it is
 the `treasure` key of the loot snapshot and the saved heightmap decides whether it
 is already uncovered. Once opened it is a claimed id, so it never comes back.
 
+## The story quests
+
+The beach has a five-quest chain that doubles as a second income next to selling
+junk. It is designed to walk the same path as the tool chain: plain junk first,
+then the metal finds the detector is for, then the deep antique band, and finally
+the one gold ring.
+
+| # | quest | asks for | pays |
+| --- | --- | --- | --- |
+| 1 | First Haul | 3 pieces of junk | $80 + 150 XP |
+| 2 | Detector Practice | 2 metal finds (Rusty Can, Scrap Metal, Tin Lid) | $160 + 300 XP |
+| 3 | The Deep Band | 1 antique | $450 + 800 XP |
+| 4 | Keeper of the Deep | 3 antiques | $900 + 1500 XP |
+| 5 | The Golden Ring | the one gold ring | $2500 + 5000 XP |
+
+Together that is $4090 and 7750 XP, which is what pays for the later shovels
+without grinding junk for hours.
+
+`scripts/quests.gd` owns the definitions (`Quests.QUESTS`) and listens to
+`LootManager.loot_claimed`, the same broadcast every peer already gets. A find
+only counts if the payload's `owner` is this machine's player id, so in
+multiplayer each player progresses through their own chain even when somebody
+else digs the same item up first. The HUD shows the open quest and its counter in
+the top-left corner, and completing one plays the `upgrade` chime, the gold
+banner and a `+$X +Y XP` line.
+
+Progress lives in `PlayerState` (`quest_index`, `quest_progress`,
+`gold_ring_found`) and is written to the profile on every change, so a half
+finished "2 of 3 antiques" survives a quit. Because there is only one ring in the
+world, a player can dig it up before quest 5 opens; `gold_ring_found` remembers
+that and the last quest settles itself as soon as the chain reaches it (and it
+never pays twice).
+
 ## Tests
 
 ```
@@ -377,8 +426,11 @@ godot --headless --path . res://tests/profile_test.tscn   # round trip, damaged 
 godot --headless --path . res://tests/beach_test.tscn     # save/restore a real dug beach, damaged files
 godot --headless --path . res://tests/treasure_test.tscn  # map offer, deep chest, payout, saved chest
 godot --headless --path . res://tests/sea_test.tscn       # beach profile, tide, seabed clip, surf junk, ebb sink, pit flooding from its rim, and a cut-off pool levelling and soaking away
+godot --headless --path . res://tests/quest_test.tscn     # one gold ring deep down, quest chain, payouts, early ring, profile round trip
 godot --path . res://tests/sea_shot.tscn                  # visual: low tide, high tide, a pit while it fills and full, from under water, and cut off by the ebb
+godot --path . res://tests/quest_shot.tscn                # visual: the quest line and a quest completion banner
 ```
 
 Sound output cannot be heard headless, so the assertions check which stream was handed
 to which player and which node was spawned. The actual mix still has to be judged by ear.
+

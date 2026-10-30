@@ -11,6 +11,7 @@
 [ext_resource type="Script" path="res://scripts/shop_ui.gd" id="9_shop"]
 [ext_resource type="Script" path="res://scripts/sea.gd" id="10_sea"]
 [ext_resource type="Script" path="res://scripts/coastal_scenery.gd" id="11_scenery"]
+[ext_resource type="Script" path="res://scripts/quests.gd" id="12_quests"]
 
 [sub_resource type="ProceduralSkyMaterial" id="SkyMaterial_sand"]
 sky_top_color = Color(0.28, 0.52, 0.85, 1)
@@ -79,3 +80,6 @@ script = ExtResource("6_hud")
 script = ExtResource("9_shop")
 
 [node name="PauseMenu" parent="." instance=ExtResource("7_pause")]
+
+[node name="Quests" type="Node" parent="."]
+script = ExtResource("12_quests")

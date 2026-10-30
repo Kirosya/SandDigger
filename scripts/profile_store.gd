@@ -60,6 +60,9 @@ func load_into(state: PlayerState) -> bool:
 	var detector := int(config.get_value(section, "detector_tier", legacy_detector))
 	state.detector_tier = clampi(detector, 0, PlayerState.DETECTOR_TIERS.size() - 1)
 	state.treasure_finds = maxi(0, int(config.get_value(section, "treasure_finds", 0)))
+	state.quest_index = maxi(0, int(config.get_value(section, "quest_index", 0)))
+	state.quest_progress = maxi(0, int(config.get_value(section, "quest_progress", 0)))
+	state.gold_ring_found = bool(config.get_value(section, "gold_ring_found", false))
 
 	# Level and tier are derived, never trusted: a stale or edited file cannot
 	# hand out a shovel the player did not earn.
@@ -92,6 +95,9 @@ func save_state(state: PlayerState) -> void:
 	config.set_value(section, "tier", state.equipment_tier_index)
 	config.set_value(section, "detector_tier", state.detector_tier)
 	config.set_value(section, "treasure_finds", state.treasure_finds)
+	config.set_value(section, "quest_index", state.quest_index)
+	config.set_value(section, "quest_progress", state.quest_progress)
+	config.set_value(section, "gold_ring_found", state.gold_ring_found)
 	config.set_value(section, "slots", state.bag_slots.size())
 	for i in state.bag_slots.size():
 		var slot: Dictionary = state.bag_slots[i]

@@ -97,9 +97,9 @@ func _ready() -> void:
 		trash_value / maxf(trash_count, 1.0), trash_count,
 		ring_value / maxf(rings, 1.0), rings,
 		antique_value / maxf(antiques, 1.0), antiques])
-	print("depth bands  trash %.2f-%.2f  ring %.2f-%.2f  antique %.2f-%.2f" % [
+	print("depth bands  trash %.2f-%.2f  ring %.2f (only one)  antique %.2f-%.2f" % [
 		LootManager.TRASH_DEPTH_MIN, LootManager.TRASH_DEPTH_MAX,
-		LootManager.RING_DEPTH_MIN, LootManager.RING_DEPTH_MAX,
+		LootManager.RING_DEPTH,
 		LootManager.ANTIQUE_DEPTH_MIN, LootManager.ANTIQUE_DEPTH_MAX])
 	print("world money total=$%.0f  buried depth avg=%.2f min=%.2f max=%.2f" % [
 		total_value, depth_sum / maxf(buried, 1.0), depth_min, depth_max])

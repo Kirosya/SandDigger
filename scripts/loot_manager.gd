@@ -1,6 +1,7 @@
 class_name LootManager
 extends Node
-## Loot: trash/scrap and gold rings, both buried and lying on the sand.
+## Loot: trash/scrap, antiques and the one gold ring, both buried and lying on the
+## sand.
 ##
 ## Buried items are in the world from the start: they sit at their burial depth
 ## and the opaque sand surface above them hides them. Digging lowers that
@@ -34,18 +35,26 @@ const LOOT_COUNT := 200
 ## Share of the scatter that is lying in plain sight. The rest is under the
 ## sand, and the dig depths below are what make the beach slow again.
 const SURFACE_CHANCE := 0.08
-## One in eleven buried finds is a gold ring, one in thirty-three is an antique.
+## One in thirty-three buried finds is an antique. Rings are rolled too, but only
+## to keep the scatter identical to the old beaches; `_crown_gold_ring` keeps
+## exactly one of them and turns the rest into junk (see `RING_NAME`).
 const RING_CHANCE := 0.09
 const ANTIQUE_CHANCE := 0.03
 ## Dig bands, in metres below the natural surface. Junk is a shallow scoop, a
-## ring needs a real hole, and the antique is only reachable once the pit is
-## deep - which, with sand that caves in, is the whole point of the dig loop.
+## rolled ring needs a real hole, and the antique is only reachable once the pit
+## is deep - which, with sand that caves in, is the whole point of the dig loop.
 const TRASH_DEPTH_MIN := 0.30
 const TRASH_DEPTH_MAX := 1.20
 const RING_DEPTH_MIN := 1.20
 const RING_DEPTH_MAX := 2.60
 const ANTIQUE_DEPTH_MIN := 3.50
 const ANTIQUE_DEPTH_MAX := 5.00
+## The legend of the beach: exactly ONE gold ring, buried deeper than any ordinary
+## find and worth a fortune on its own. Every other rolled ring is turned into
+## junk, so the beach can never hand out a second one.
+const RING_NAME := "Gold Ring"
+const RING_DEPTH := 5.20
+const RING_VALUE := 1500.0
 const SPAWN_RADIUS := 22.0
 ## Extra items scattered right around the spawn so the beach never looks empty.
 const STARTER_COUNT := 10
@@ -578,6 +587,58 @@ func _spawn_loot() -> void:
 		placed.append(point)
 		loot.append(_build_item(point))
 
+	_crown_gold_ring()
+
+
+## The beach has exactly ONE gold ring: the deepest of the rings the scatter
+## rolled becomes the legend (crowded onto `RING_DEPTH`), and every other rolled
+## ring is turned back into ordinary junk. Doing it this way instead of removing
+## the ring roll keeps the whole scatter - points, ids, depths - exactly where it
+## was, so a beach saved by an older build still lines up with its claims.
+func _crown_gold_ring() -> void:
+	var rings: Array[LootItem] = []
+	for item in loot:
+		if item.kind == "ring":
+			rings.append(item)
+	if rings.is_empty():
+		return
+	var legend := rings[0]
+	for item in rings:
+		if item.depth > legend.depth:
+			legend = item
+	legend.display_name = RING_NAME
+	legend.value = RING_VALUE
+	legend.metal = true
+	legend.depth = RING_DEPTH
+	if legend.node != null:
+		legend.node.position.y = -RING_DEPTH
+
+	# A separate, deterministic RNG: turning the spare rings into junk must not
+	# disturb the main scatter stream for the rest of the beach.
+	var junk_rng := RandomNumberGenerator.new()
+	junk_rng.seed = 20261030
+	for item in rings:
+		if item == legend:
+			continue
+		item.kind = "trash"
+		item.display_name = TRASH_NAMES[junk_rng.randi() % TRASH_NAMES.size()]
+		item.metal = item.display_name in METAL_NAMES
+		item.value = junk_rng.randf_range(18.0, 40.0)
+		item.depth = junk_rng.randf_range(TRASH_DEPTH_MIN, TRASH_DEPTH_MAX)
+		# The mesh follows the kind, so the torus has to go.
+		if item.node != null:
+			item.node.queue_free()
+		item.node = _make_visual(item)
+
+
+## The unclaimed gold ring, or null once a player has dug it up. There is exactly
+## one ring in the world, so this is either it or null.
+func gold_ring() -> LootItem:
+	for item in loot:
+		if item.kind == "ring":
+			return null if item.claimed else item
+	return null
+
 
 func _starter_point() -> Vector2:
 	var angle := _rng.randf() * TAU
@@ -623,7 +684,7 @@ func _build_item(point: Vector2) -> LootItem:
 		item.depth = _rng.randf_range(ANTIQUE_DEPTH_MIN, ANTIQUE_DEPTH_MAX)
 	elif not item.on_surface and roll < ANTIQUE_CHANCE + RING_CHANCE:
 		item.kind = "ring"
-		item.display_name = "Gold Ring"
+		item.display_name = RING_NAME
 		item.value = _rng.randf_range(150.0, 320.0)
 		item.depth = _rng.randf_range(RING_DEPTH_MIN, RING_DEPTH_MAX)
 	else:

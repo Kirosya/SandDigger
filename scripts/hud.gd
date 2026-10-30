@@ -29,6 +29,8 @@ var _ping_timer := 0.0
 var _ping_range := -1.0
 var _detector_status: Label
 var _treasure: Label
+var _quest: Label
+var _quest_hint: Label
 var _status_text := ""
 
 var _banner: Label
@@ -93,6 +95,18 @@ func _build() -> void:
 	_treasure.name = "Treasure"
 	_treasure.position = Vector2(24, 172)
 	root.add_child(_treasure)
+
+	# The story quest this player is working on. Always visible while a quest is
+	# open, because it is the direction the game wants to pull them in.
+	_quest = _make_label(16, Color(0.62, 0.95, 1.0, 0.95))
+	_quest.name = "Quest"
+	_quest.position = Vector2(24, 198)
+	root.add_child(_quest)
+
+	_quest_hint = _make_label(14, Color(0.72, 0.88, 0.95, 0.75))
+	_quest_hint.name = "QuestHint"
+	_quest_hint.position = Vector2(30, 220)
+	root.add_child(_quest_hint)
 
 	_crosshair = _make_label(26, Color(1, 1, 1, 0.85))
 	_crosshair.name = "Crosshair"
@@ -428,6 +442,7 @@ func _process(delta: float) -> void:
 			_ping_timer = 0.13 if _pings_left > 0 else 0.0
 
 	_update_treasure_line()
+	_update_quest_line()
 
 
 ## The treasure line only says that a chest is still out there. It deliberately
@@ -442,6 +457,33 @@ func _update_treasure_line() -> void:
 		_treasure.text = ""
 		return
 	_treasure.text = "TREASURE  -  a chest is buried somewhere on this beach"
+
+
+## The story line: which quest is open and how far along it is. Read from the
+## Quests node so the chain itself stays the single source of truth.
+func _update_quest_line() -> void:
+	if _quest == null or _quest_hint == null:
+		return
+	var quests := get_tree().get_first_node_in_group("quests") as Quests
+	if quests == null:
+		_quest.text = ""
+		return
+	var def := quests.current_quest()
+	if def.is_empty():
+		_quest.text = ""
+		_quest_hint.text = ""
+		return
+	_quest.text = "%s   %d/%d" % [
+		str(def["title"]).to_upper(), quests.quest_progress(), int(def["count"])]
+	_quest_hint.text = str(def["hint"])
+
+
+## A quest was completed: banner, chime and the payout, all in one beat.
+func announce_quest(title: String, money: int, xp: int) -> void:
+	_announce("QUEST COMPLETE  -  %s" % title.to_upper())
+	if _chime != null:
+		_chime.play()
+	flash("+$%d   +%d XP" % [money, xp])
 
 
 func refresh() -> void:
