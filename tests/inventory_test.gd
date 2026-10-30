@@ -202,9 +202,11 @@ func _ready() -> void:
 	_check("a click away from the junkyard does not sell",
 		state.held_slot == 1 and is_equal_approx(state.current_money, money_before_far))
 
-	# An empty bag slot is skipped instead of becoming a dead stop.
+	# The wheel stops on empty slots too, so scrolling can always reach empty
+	# hands instead of bouncing over them.
 	dig._cycle_hotbar(1)
-	_check("wheel skips an empty bag slot", state.held_slot == 3)
+	_check("wheel stops on an empty bag slot", state.is_hand_empty()
+		and state.selected_slot == PlayerState.FIRST_BAG_SLOT + 2)
 	state.set_held_slot(-1)
 	yard.queue_free()
 	await get_tree().process_frame
@@ -218,6 +220,30 @@ func _ready() -> void:
 	dig._unhandled_input(wheel)
 	_check("mouse wheel down changes the slot", state.held_slot == 1)
 	state.set_held_slot(-1)
+
+	# --- Picking loot up needs no preselected slot -------------------------
+	# The item always goes to the first free bag slot on its own; the cursor and
+	# whatever is in hand are left alone.
+	dig._select_hotbar(PlayerState.SLOT_SHOVEL)
+	var bag_before_pickup := state.carried_count()
+	state.add_loot({"id": 900, "name": "Picked Up", "kind": "can", "value": 7.0})
+	var pickup_slot := dig._slot_of_item(900)
+	print("INV pickup slot=%d cursor=%d held=%d bag=%d->%d" % [
+		pickup_slot, state.selected_slot, state.held_slot,
+		bag_before_pickup, state.carried_count()])
+	_check("loot lands in a free slot without preselecting one", pickup_slot >= 0)
+	_check("picking loot up keeps the tool in hand",
+		state.selected_slot == PlayerState.SLOT_SHOVEL and player.spoon_pivot.visible)
+	_check("the pickup message can name that slot", pickup_slot == 2)
+
+	# Even with the cursor parked on an empty slot the pickup is automatic: the
+	# item takes the free slot and the hand stays empty on the slot chosen.
+	dig._select_hotbar(PlayerState.FIRST_BAG_SLOT + 6)
+	state.add_loot({"id": 901, "name": "Another", "kind": "can", "value": 9.0})
+	_check("a pickup never needs an empty slot to be selected first",
+		dig._slot_of_item(901) >= 0)
+	_check("a pickup does not move the cursor",
+		state.selected_slot == PlayerState.FIRST_BAG_SLOT + 6)
 
 	# --- Sequential shovel upgrades ----------------------------------------
 	state.add_money(50.0)

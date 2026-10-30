@@ -218,9 +218,24 @@ func _on_loot_claimed(item: Dictionary) -> void:
 	if _state == null or int(item.get("owner", 0)) != _state.player_id:
 		return
 	Sfx.play_ui("pickup", 0.05, -4.0)
-	_flash_hud("Picked up %s  ($%d)  -  bag %d/%d" % [
-		str(item.get("name", "loot")), int(item.get("value", 0)),
+	var bag := _slot_of_item(int(item.get("id", -1)))
+	var where := ""
+	if bag >= 0:
+		where = "  ->  slot %d" % PlayerState.hotbar_number(bag + PlayerState.FIRST_BAG_SLOT)
+	_flash_hud("Picked up %s  ($%d)%s  -  bag %d/%d" % [
+		str(item.get("name", "loot")), int(item.get("value", 0)), where,
 		_state.carried_count(), PlayerState.INVENTORY_SLOTS])
+
+
+## Bag slot index holding the item with this id, or -1 when it is not carried.
+func _slot_of_item(item_id: int) -> int:
+	if _state == null:
+		return -1
+	for i in _state.bag_slots.size():
+		if not _state.bag_slots[i].is_empty() \
+				and int(_state.bag_slots[i].get("id", -2)) == item_id:
+			return i
+	return -1
 
 
 ## Picks a hotbar slot by its index (0 = shovel, 1 = detector, 2+ = bag slots).
@@ -250,21 +265,20 @@ func _current_hotbar() -> int:
 	return _state.selected_slot
 
 
-## True when the mouse wheel should stop on this slot. Empty bag slots are
-## skipped so scrolling stays useful, but the number keys can still pick them.
+## True when the mouse wheel may stop on this slot. Every bag slot qualifies,
+## empty ones included, so scrolling can always reach empty hands; only the
+## unowned detector is skipped.
 func _hotbar_slot_usable(index: int) -> bool:
 	if _state == null:
 		return false
 	if index == PlayerState.SLOT_DETECTOR:
 		return _state.has_detector
-	if index < PlayerState.FIRST_BAG_SLOT:
-		return true
-	var bag := PlayerState.bag_index_of(index)
-	return bag < _state.bag_slots.size() and not _state.bag_slots[bag].is_empty()
+	return index >= 0 and index < PlayerState.SLOT_COUNT
 
 
-## Mouse wheel: steps through the hotbar in either direction, skipping slots the
-## player cannot use (an unowned detector, an empty bag slot) and wrapping.
+## Mouse wheel: steps through the hotbar in either direction, wrapping around.
+## Empty bag slots are stops too (that is how the player gets empty hands); only
+## the unowned detector is skipped.
 func _cycle_hotbar(step: int) -> void:
 	if _state == null:
 		return
