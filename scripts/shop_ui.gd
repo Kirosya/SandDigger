@@ -1,15 +1,18 @@
 class_name ShopUI
 extends CanvasLayer
-## The market panel: buy the metal detector and the next shovel upgrade.
+## The market panel: buy the metal detector, the next shovel upgrade, and the
+## treasure maps that keep the game going once the Earth Shovel is owned.
 ##
 ## Pauses the tree while it is open (like the pause menu) so the player cannot
-## walk around behind the panel. Keys 1-4 buy, E or Esc closes. Prices and
+## walk around behind the panel. Keys 1-5 buy, E or Esc closes. Prices and
 ## requirements are read from PlayerState, so this works unchanged per player.
 
 const GOLD := Color(1.0, 0.86, 0.42)
 const GREEN := Color(0.5, 0.95, 0.55)
 const DIM := Color(0.55, 0.55, 0.58)
-const PANEL_SIZE := Vector2(700, 540)
+const PANEL_SIZE := Vector2(720, 600)
+## Index of the treasure-map row: after the detector (0) and the three shovels.
+const TREASURE_ROW := 4
 
 var _state: PlayerState
 var _player: Node3D
@@ -65,7 +68,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if event is InputEventKey and event.pressed and not event.echo:
 		var key := (event as InputEventKey).keycode
-		if key >= KEY_1 and key <= KEY_4:
+		if key >= KEY_1 and key <= KEY_5:
 			_buy(key - KEY_1)
 			get_viewport().set_input_as_handled()
 
@@ -75,6 +78,8 @@ func _buy(index: int) -> void:
 		return
 	if index == 0:
 		_buy_detector()
+	elif index >= TREASURE_ROW:
+		_buy_treasure_map()
 	else:
 		_buy_tier(index)
 	_refresh()
@@ -98,6 +103,41 @@ func _buy_detector() -> void:
 	else:
 		Sfx.play_ui("denied", 0.04, -8.0)
 		_message.text = "The detector costs $%d - keep digging!" % int(PlayerState.DETECTOR_PRICE)
+
+
+## Buys a treasure map and has the world bury the chest it leads to. This is the
+## only way to keep spending money after the Earth Shovel, and the chest pays back
+## more than the map costs, so digging stays worth it.
+func _buy_treasure_map() -> void:
+	var loot := _loot()
+	if _state.equipment_tier_index < PlayerState.TREASURE_TIER_REQUIRED:
+		Sfx.play_ui("denied", 0.04, -8.0)
+		_message.text = ("Treasure maps are only sold to owners of the %s." %
+			_state.tiers[PlayerState.TREASURE_TIER_REQUIRED].display_name)
+		return
+	if loot == null:
+		Sfx.play_ui("denied", 0.04, -8.0)
+		_message.text = "There is no beach to bury a chest in right now."
+		return
+	if loot.has_treasure():
+		Sfx.play_ui("denied", 0.04, -8.0)
+		_message.text = "A map is already out - dig up the chest first."
+		return
+	if not _state.buy_treasure_map():
+		Sfx.play_ui("denied", 0.04, -8.0)
+		_message.text = "A treasure map costs $%d." % int(PlayerState.TREASURE_MAP_PRICE)
+		return
+	var rng := RandomNumberGenerator.new()
+	rng.randomize()
+	loot.spawn_treasure(_state.next_treasure_payout(rng))
+	Sfx.play_ui("upgrade", 0.0, -3.0)
+	_message.text = ("Map bought! A shaft of light is glowing over the sand - " +
+		"dig inside it, the chest is deep.")
+
+
+## The world's loot manager, or null in a test without a beach.
+func _loot() -> LootManager:
+	return get_tree().get_first_node_in_group("loot_manager") as LootManager
 
 
 func _buy_tier(index: int) -> void:
@@ -127,8 +167,11 @@ func _buy_tier(index: int) -> void:
 func _refresh() -> void:
 	if _state == null:
 		return
-	_money.text = "Money  $%d          Level %d" % [
+	var header := "Money  $%d          Level %d" % [
 		int(_state.current_money), _state.current_level]
+	if _state.treasure_finds > 0:
+		header += "          Chests  %d" % _state.treasure_finds
+	_money.text = header
 
 	# Row 0: the detector.
 	var owns_detector := _state.has_detector
@@ -141,7 +184,7 @@ func _refresh() -> void:
 			GREEN if can_buy else GOLD, Color.WHITE)
 
 	# Rows 1..3: the shovel chain.
-	for i in range(1, _row_names.size()):
+	for i in range(1, TREASURE_ROW):
 		if i >= _state.tiers.size():
 			_row_names[i].text = ""
 			_row_status[i].text = ""
@@ -160,6 +203,29 @@ func _refresh() -> void:
 		else:
 			_set_row(i, label, "LOCKED  ·  Lv %d" % tier.level_required,
 				DIM, DIM)
+
+	_refresh_treasure_row()
+
+
+## The endgame row: the map only appears as an offer once the last shovel is
+## owned, so it never distracts a player who is still working up the chain.
+func _refresh_treasure_row() -> void:
+	var row := TREASURE_ROW
+	var label := "[%d]  Treasure Map" % (row + 1)
+	var loot := _loot()
+	if _state.equipment_tier_index < PlayerState.TREASURE_TIER_REQUIRED:
+		var shovel := _state.tiers[PlayerState.TREASURE_TIER_REQUIRED].display_name
+		_set_row(row, label, "LOCKED  ·  %s" % shovel, DIM, DIM)
+		return
+	if loot != null and loot.has_treasure():
+		_set_row(row, label, "MAP OUT  ·  dig the chest", GOLD, Color.WHITE)
+		return
+	if _state.current_money >= PlayerState.TREASURE_MAP_PRICE:
+		_set_row(row, label, "BUY  $%d" % int(PlayerState.TREASURE_MAP_PRICE),
+			GREEN, Color.WHITE)
+	else:
+		_set_row(row, label, "$%d" % int(PlayerState.TREASURE_MAP_PRICE),
+			GOLD, Color.WHITE)
 
 
 func _set_row(index: int, name_text: String, status_text: String,
@@ -216,7 +282,7 @@ func _build() -> void:
 	var rule := HSeparator.new()
 	box.add_child(rule)
 
-	for i in 4:
+	for i in 5:
 		# The whole row is a Button, so a mouse click or a touch tap buys it.
 		# The labels inside ignore the mouse so the click always reaches the row.
 		var button := Button.new()
@@ -264,7 +330,7 @@ func _build() -> void:
 	box.add_child(_message)
 
 	var footer := _make_label(15, Color(1, 1, 1, 0.55))
-	footer.text = "Click a row to buy   ·   1-4: buy   ·   E / Esc: leave"
+	footer.text = "Click a row to buy   ·   1-5: buy   ·   E / Esc: leave"
 	footer.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	box.add_child(footer)
 

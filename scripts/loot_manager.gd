@@ -18,6 +18,9 @@ signal loot_claimed(item: Dictionary)
 ## Emitted when the loot in the world changes in a way worth saving (a claim, or
 ## junk the tide just washed in). The beach saver listens to this, no extra RPC.
 signal world_changed()
+## Emitted on every peer when a treasure chest is opened, so all of them can
+## cheer. `item` is the usual loot description plus the payout in "value".
+signal treasure_opened(item: Dictionary)
 
 const SIGNAL_RANGE := 8.0
 ## Signal falls off quadratically so the detector is only "hot" when you are
@@ -84,6 +87,19 @@ const DRY_LIMIT_Z := -10.5
 const DRY_LIMIT_X := 20.5
 const INLAND_LIMIT_Z := 22.5
 
+## --- Treasure hunt -------------------------------------------------------
+## The chest a map leads to sits far deeper than the trash (the Earth Shovel
+## reaches 2.0 m), and the map under-sells where exactly: the light marks a wide
+## area, so the detector still has a job to do inside it.
+const TREASURE_DEPTH := 1.85
+const TREASURE_BEACON_RADIUS := 3.6
+## Where a map may put a chest: dry open sand, away from the spawn and the stalls.
+const TREASURE_MIN_X := -16.0
+const TREASURE_MAX_X := 16.0
+const TREASURE_MIN_Z := -8.0
+const TREASURE_MAX_Z := 18.0
+const TREASURE_MIN_FROM_SPAWN := 9.0
+
 ## How hard metal clutter can wobble the detector reading (0..1 added jitter).
 const NOISE_STRENGTH := 0.4
 ## Metal contributions are summed then divided by this, so a single can is a
@@ -113,6 +129,10 @@ class LootItem:
 	var drift_target := Vector3.ZERO
 	## True for items the tide floated in (they count against the sea-trash cap).
 	var from_sea := false
+	## True for the buried treasure chest a map leads to. It is a normal LootItem
+	## so claims, saves and late joins work unchanged, but it is dug up from much
+	## deeper and pays out through PlayerState instead of the bag.
+	var is_treasure := false
 	var node: Node3D
 
 
@@ -127,6 +147,8 @@ var _noise_rng := RandomNumberGenerator.new()
 var _sea: Sea
 var _sea_spawn_timer := 2.0
 var _float_sync_timer := 0.0
+## The light shaft over an unopened treasure, if any.
+var _beacon: Node3D
 
 
 func _ready() -> void:
@@ -225,39 +247,50 @@ func _client_claim(loot_id: int, player_id: int) -> void:
 
 
 ## Drops the visual everywhere; only the claimer's own machine stores it in the
-## bag, because that is where their bag lives.
+## bag, because that is where their bag lives. A treasure chest is not bag loot:
+## it pays straight into that player's money.
 func _apply_claim(item: LootItem, player_id: int) -> void:
 	if item.node != null:
 		item.node.queue_free()
 		item.node = null
+	if item.is_treasure:
+		_drop_beacon()
 	if not Net.is_online() or player_id == Net.local_id:
 		var state := Net.local_state()
 		if state != null:
-			state.add_loot({
-				"id": item.loot_id,
-				"name": item.display_name,
-				"kind": item.kind,
-				"value": item.value,
-			})
+			if item.is_treasure:
+				state.register_treasure_find(item.value)
+			else:
+				state.add_loot({
+					"id": item.loot_id,
+					"name": item.display_name,
+					"kind": item.kind,
+					"value": item.value,
+				})
 	print("[loot] claimed '%s' ($%d) by player %d" % [item.display_name, int(item.value), player_id])
 	loot_claimed.emit(_describe(item))
+	if item.is_treasure:
+		treasure_opened.emit(_describe(item))
 
 
 ## --- Late join ------------------------------------------------------------
 ##
 ## The base scatter is generated from a fixed seed, so every peer already has
-## the same 200+ items. A late joiner only needs what changed since: the claims
-## and the junk the tide floated in.
+## the same 200+ items. A late joiner only needs what changed since: the claims,
+## the junk the tide floated in, and the treasure chest a map put in the sand.
 
 func export_snapshot() -> Dictionary:
 	var claimed := PackedInt32Array()
 	var sea: Array[Dictionary] = []
+	var treasure: Dictionary = {}
 	for item in loot:
 		if item.claimed:
 			claimed.append(item.loot_id)
+		elif item.is_treasure:
+			treasure = _pack_treasure(item)
 		elif item.from_sea:
 			sea.append(_pack_sea(item))
-	return {"claimed": claimed, "sea": sea}
+	return {"claimed": claimed, "sea": sea, "treasure": treasure}
 
 
 func apply_snapshot(data: Dictionary) -> void:
@@ -273,6 +306,11 @@ func apply_snapshot(data: Dictionary) -> void:
 			item.node = null
 	for entry in data.get("sea", []):
 		_add_sea_item(entry)
+	var treasure: Dictionary = data.get("treasure", {})
+	if not treasure.is_empty() and find_loot(int(treasure.get("id", 0))) == null:
+		_add_treasure_item(treasure)
+	if not has_treasure():
+		_drop_beacon()
 
 
 ## Rebuilds the visible loot after a saved beach has been restored.
@@ -566,6 +604,161 @@ func _spawn_sea_trash() -> LootItem:
 	return item
 
 
+## --- Treasure hunt -------------------------------------------------------
+
+## True while a bought map is still unopened, i.e. the chest is in the sand.
+func has_treasure() -> bool:
+	for item in loot:
+		if item.is_treasure and not item.claimed:
+			return true
+	return false
+
+
+## The unclaimed treasure, or null.
+func active_treasure() -> LootItem:
+	for item in loot:
+		if item.is_treasure and not item.claimed:
+			return item
+	return null
+
+
+## Puts the chest a bought map leads to somewhere in the open sand, under the
+## light shaft. Host-only in multiplayer: clients learn about it through the
+## snapshot and the usual claim broadcast.
+func spawn_treasure(payout: float) -> LootItem:
+	var spot := _treasure_spot()
+	var item := LootItem.new()
+	item.loot_id = _next_id
+	_next_id += 1
+	item.kind = "treasure"
+	item.display_name = "Sunken Chest"
+	item.value = payout
+	item.depth = TREASURE_DEPTH
+	item.is_treasure = true
+	item.buried_position = Vector3(spot.x, 0.0, spot.y)
+	item.node = _make_visual(item)
+	loot.append(item)
+	_spawn_beacon(item.buried_position)
+	if Net.is_online():
+		rpc("_client_add_treasure", _pack_treasure(item))
+	world_changed.emit()
+	return item
+
+
+func _client_add_treasure(entry: Dictionary) -> void:
+	_add_treasure_item(entry)
+
+
+## A fair spot for the chest: dry sand, clear of the spawn and the stalls, so the
+## dig never starts under the player's feet.
+func _treasure_spot() -> Vector2:
+	var point := Vector2.ZERO
+	for attempt in 40:
+		point = Vector2(
+			_rng.randf_range(TREASURE_MIN_X, TREASURE_MAX_X),
+			_rng.randf_range(TREASURE_MIN_Z, TREASURE_MAX_Z))
+		if point.distance_to(SPAWN_CLEAR) >= TREASURE_MIN_FROM_SPAWN \
+				and point.distance_to(JUNKYARD_CLEAR) >= 4.0:
+			break
+	return point
+
+
+func _pack_treasure(item: LootItem) -> Dictionary:
+	return {
+		"id": item.loot_id,
+		"name": item.display_name,
+		"value": item.value,
+		"pos": item.buried_position,
+	}
+
+
+func _add_treasure_item(entry: Dictionary) -> void:
+	var id := int(entry.get("id", 0))
+	if id <= 0 or find_loot(id) != null:
+		return
+	var item := LootItem.new()
+	item.loot_id = id
+	_next_id = maxi(_next_id, id + 1)
+	item.kind = "treasure"
+	item.display_name = str(entry.get("name", "Sunken Chest"))
+	item.value = float(entry.get("value", 0.0))
+	item.depth = TREASURE_DEPTH
+	item.is_treasure = true
+	item.buried_position = entry.get("pos", Vector3.ZERO)
+	item.node = _make_visual(item)
+	loot.append(item)
+	_spawn_beacon(item.buried_position)
+
+
+## The marker over a treasure area. A wide flat ring draws the area on the sand and
+## a slim light beam marks its centre; the map says "dig around here", so the ring
+## (not a solid funnel) is what the player actually needs to see.
+func _spawn_beacon(at: Vector3) -> void:
+	_drop_beacon()
+	if _root == null:
+		return
+	var beacon := Node3D.new()
+	beacon.name = "TreasureBeacon"
+	beacon.position = Vector3(at.x, 0.0, at.z)
+
+	var beam := MeshInstance3D.new()
+	beam.name = "Beam"
+	var beam_mesh := CylinderMesh.new()
+	beam_mesh.top_radius = 0.35
+	beam_mesh.bottom_radius = 0.6
+	beam_mesh.height = 24.0
+	beam_mesh.radial_segments = 16
+	beam_mesh.rings = 1
+	beam_mesh.cap_top = false
+	beam_mesh.cap_bottom = false
+	beam.mesh = beam_mesh
+	beam.position.y = 11.4
+	beam.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	beam.material_override = _beacon_material(0.09)
+	beacon.add_child(beam)
+
+	var ring := MeshInstance3D.new()
+	ring.name = "Ring"
+	var ring_mesh := TorusMesh.new()
+	ring_mesh.inner_radius = TREASURE_BEACON_RADIUS - 0.12
+	ring_mesh.outer_radius = TREASURE_BEACON_RADIUS
+	ring_mesh.rings = 48
+	ring_mesh.ring_segments = 6
+	ring.mesh = ring_mesh
+	ring.position.y = 0.06
+	ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	ring.material_override = _beacon_material(0.40)
+	beacon.add_child(ring)
+
+	_root.add_child(beacon)
+	_beacon = beacon
+
+
+## Additive, unshaded gold used by both beacon pieces.
+func _beacon_material(alpha: float) -> StandardMaterial3D:
+	var material := StandardMaterial3D.new()
+	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	material.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	material.albedo_color = Color(1.0, 0.83, 0.35, alpha)
+	return material
+
+
+func _drop_beacon() -> void:
+	if _beacon != null and is_instance_valid(_beacon):
+		_beacon.queue_free()
+	_beacon = null
+
+
+## Distance from `from` to the treasure area's centre, or INF when no map is out.
+func treasure_distance(from: Vector3) -> float:
+	var item := active_treasure()
+	if item == null:
+		return INF
+	return Vector2(from.x - item.buried_position.x, from.z - item.buried_position.z).length()
+
+
 func _drift_floating(delta: float) -> void:
 	_float_sync_timer -= delta
 	var sync := Net.is_online() and _float_sync_timer <= 0.0
@@ -638,7 +831,9 @@ func _make_visual(item: LootItem) -> Node3D:
 	# hides it. That way digging uncovers it instead of spawning it.
 	root.visible = true
 	# Surface junk reads better a little chunkier than a buried fragment.
-	if item.on_surface:
+	if item.is_treasure:
+		root.scale = Vector3(2.4, 2.4, 2.4)
+	elif item.on_surface:
 		var size := 1.25 + float(item.loot_id % 6) * 0.07
 		root.scale = Vector3(size, size, size)
 	root.add_child(_make_piece(item))
@@ -663,6 +858,40 @@ func _make_piece(item: LootItem) -> MeshInstance3D:
 	var label := item.display_name.to_lower()
 	var tilt := float(item.loot_id * 29 % 360)
 	var material_kind := "trash"
+
+	if item.is_treasure:
+		# A proper chest: dark planked body, gold-banded lid. Built from boxes so
+		# the project still needs no imported model.
+		var body := BoxMesh.new()
+		body.size = Vector3(0.66, 0.34, 0.44)
+		mesh_instance.mesh = body
+		mesh_instance.material_override = _get_material("treasure")
+		var lid := BoxMesh.new()
+		lid.size = Vector3(0.7, 0.24, 0.46)
+		var lid_piece := MeshInstance3D.new()
+		lid_piece.name = "Lid"
+		lid_piece.mesh = lid
+		lid_piece.position = Vector3(0.0, 0.27, 0.0)
+		lid_piece.material_override = _get_material("treasure")
+		mesh_instance.add_child(lid_piece)
+		for x in [-0.22, 0.22]:
+			var band := BoxMesh.new()
+			band.size = Vector3(0.05, 0.62, 0.5)
+			var band_piece := MeshInstance3D.new()
+			band_piece.name = "Band"
+			band_piece.mesh = band
+			band_piece.position = Vector3(x, 0.1, 0.0)
+			band_piece.material_override = _get_material("treasure_trim")
+			mesh_instance.add_child(band_piece)
+		var lock := BoxMesh.new()
+		lock.size = Vector3(0.14, 0.16, 0.06)
+		var lock_piece := MeshInstance3D.new()
+		lock_piece.name = "Lock"
+		lock_piece.mesh = lock
+		lock_piece.position = Vector3(0.0, 0.18, 0.24)
+		lock_piece.material_override = _get_material("treasure_trim")
+		mesh_instance.add_child(lock_piece)
+		return mesh_instance
 
 	if item.kind == "ring":
 		var torus := TorusMesh.new()
@@ -754,6 +983,14 @@ func _get_material(kind: String) -> StandardMaterial3D:
 		return _materials[kind]
 	var material := StandardMaterial3D.new()
 	match kind:
+		"treasure":
+			material.albedo_color = Color(0.3, 0.19, 0.11)
+			material.metallic = 0.1
+			material.roughness = 0.75
+		"treasure_trim":
+			material.albedo_color = Color(0.98, 0.8, 0.28)
+			material.metallic = 0.95
+			material.roughness = 0.2
 		"ring":
 			material.albedo_color = Color(0.98, 0.78, 0.22)
 			material.metallic = 0.9
@@ -869,4 +1106,5 @@ func _describe(item: LootItem) -> Dictionary:
 		"value": item.value,
 		"owner": item.owner_id,
 		"position": item.buried_position,
+		"treasure": item.is_treasure,
 	}

@@ -17,6 +17,8 @@ signal inventory_changed(slots: Array[Dictionary], held_slot: int)
 signal detector_changed(has_detector: bool)
 ## Emitted when digging pushes this player past a level threshold.
 signal leveled_up(new_level: int)
+## Emitted when this player opens a buried treasure chest.
+signal treasure_found(finds: int, payout: float)
 
 ## XP awarded per cubic metre of removed sand. Tunable balance knob.
 const XP_PER_CUBIC_METER := 150.0
@@ -36,6 +38,22 @@ const SLOT_COUNT := FIRST_BAG_SLOT + INVENTORY_SLOTS
 ## What the market charges for the metal detector.
 const DETECTOR_PRICE := 35.0
 
+## --- The treasure hunt (endgame) -----------------------------------------
+##
+## Once the Earth Shovel is owned the shovel chain has no next tier, and money
+## had nothing left to buy. The market then sells treasure maps: a map puts a
+## buried chest on the beach, marked by a shaft of light, and the chest pays far
+## more than the map costs. It is the one money sink that also gives the best
+## shovel a purpose (the chest sits nearly two metres down), and it can be
+## repeated, so digging never runs out of direction.
+const TREASURE_MAP_PRICE := 400.0
+## Tier index of the Earth Shovel: the map only shows up once you own it.
+const TREASURE_TIER_REQUIRED := 3
+## Payout of the first chest ever opened by this profile; later ones are random.
+const TREASURE_FIRST_PAYOUT := 1500.0
+const TREASURE_PAYOUT_MIN := 1000.0
+const TREASURE_PAYOUT_MAX := 1400.0
+
 ## Unique id assigned by the host when the player joins. 0 = offline/prototype.
 @export var player_id: int = 0
 
@@ -49,6 +67,9 @@ var current_money: float = 0.0
 var equipment_tier_index: int = 0
 ## True once the metal detector has been bought at the market.
 var has_detector: bool = false
+## How many treasure chests this player has opened. Persisted, because the first
+## find pays a fixed "legend" amount and the HUD likes to remember it.
+var treasure_finds: int = 0
 
 ## Ordered equipment chain for THIS player.
 var tiers: Array[EquipmentData] = []
@@ -197,16 +218,19 @@ func is_inventory_full() -> bool:
 
 
 ## Puts a claimed loot item in the first empty slot. Returns false when full.
-## The slot index is kept for as long as the item is in the bag. Picking loot up
-## never yanks it into the hand: if it lands on the selected (empty) slot, the
-## hand simply stays empty.
+## The slot index is kept for as long as the item is in the bag. If that free slot
+## happens to be the one already selected, the item goes straight into the hand —
+## the player is looking at that slot, so showing the pickup there is what they
+## expect. On any other slot the hand is left alone (a tool stays a tool).
 func add_loot(item: Dictionary) -> bool:
 	_ensure_bag()
 	for i in bag_slots.size():
 		if bag_slots[i].is_empty():
 			bag_slots[i] = item
 			if i == bag_index_of(selected_slot):
-				_stowed = true
+				# Landed on the slot under the cursor: un-stow so it is visible in
+				# hand immediately, without the player re-selecting the slot.
+				_stowed = false
 			_emit_inventory()
 			return true
 	return false
@@ -340,6 +364,39 @@ func next_tier_index() -> int:
 	if next_index >= tiers.size():
 		return -1
 	return next_index
+
+
+## True when the treasure map is on offer: the shovel chain is finished and the
+## player can afford one. Whether a map is already out on the beach is a world
+## question, answered by LootManager.has_treasure().
+func can_buy_treasure_map() -> bool:
+	return equipment_tier_index >= TREASURE_TIER_REQUIRED \
+		and current_money >= TREASURE_MAP_PRICE
+
+
+## Buys a treasure map. Only spends the money; the shop then asks the world to
+## put a chest on the beach.
+func buy_treasure_map() -> bool:
+	if not can_buy_treasure_map():
+		return false
+	add_money(-TREASURE_MAP_PRICE)
+	return true
+
+
+## Records an opened chest and its payout. Returns the new find count.
+func register_treasure_find(payout: float) -> int:
+	treasure_finds += 1
+	add_money(payout)
+	treasure_found.emit(treasure_finds, payout)
+	return treasure_finds
+
+
+## Payout of the next chest: the first one this profile finds is a fixed legend
+## amount, everything after it rolls inside a band.
+func next_treasure_payout(rng: RandomNumberGenerator) -> float:
+	if treasure_finds == 0:
+		return TREASURE_FIRST_PAYOUT
+	return rng.randf_range(TREASURE_PAYOUT_MIN, TREASURE_PAYOUT_MAX)
 
 
 ## Spends the tier's money cost and equips it. Requires BOTH thresholds.

@@ -56,6 +56,7 @@ func load_into(state: PlayerState) -> bool:
 	state.current_xp = maxf(0.0, float(config.get_value(section, "xp", 0.0)))
 	state.current_money = maxf(0.0, float(config.get_value(section, "money", 0.0)))
 	state.has_detector = bool(config.get_value(section, "has_detector", false))
+	state.treasure_finds = maxi(0, int(config.get_value(section, "treasure_finds", 0)))
 
 	# Level and tier are derived, never trusted: a stale or edited file cannot
 	# hand out a shovel the player did not earn.
@@ -87,6 +88,7 @@ func save_state(state: PlayerState) -> void:
 	config.set_value(section, "money", state.current_money)
 	config.set_value(section, "tier", state.equipment_tier_index)
 	config.set_value(section, "has_detector", state.has_detector)
+	config.set_value(section, "treasure_finds", state.treasure_finds)
 	config.set_value(section, "slots", state.bag_slots.size())
 	for i in state.bag_slots.size():
 		var slot: Dictionary = state.bag_slots[i]

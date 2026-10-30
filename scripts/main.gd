@@ -155,6 +155,7 @@ func _wire_profile(player: FirstPersonPlayer) -> void:
 	state.equipment_changed.connect(_on_equipment_save)
 	state.detector_changed.connect(_on_detector_save)
 	state.carried_changed.connect(_on_carried_save)
+	state.treasure_found.connect(_on_treasure_save)
 
 
 func _on_level_up_save(_level: int) -> void:
@@ -171,6 +172,14 @@ func _on_detector_save(_has_detector: bool) -> void:
 
 func _on_carried_save(_count: int, _value: float) -> void:
 	_save_profile(0.0)
+
+
+## A chest was opened: the find count and the payout belong in the profile, and
+## the world no longer has a chest to point at.
+func _on_treasure_save(_finds: int, _payout: float) -> void:
+	_save_profile(0.0)
+	_world_dirty = true
+	_save_world()
 
 
 func _save_profile(_money: float) -> void:
@@ -315,8 +324,21 @@ func _wire_loot_announcements() -> void:
 	# Sound and sparkle happen on every peer, because every peer already gets
 	# the same `loot_revealed` broadcast. No extra RPC.
 	loot.loot_revealed.connect(_on_loot_revealed_sfx)
+	loot.treasure_opened.connect(_on_treasure_opened_sfx)
 	if hud != null:
 		loot.loot_revealed.connect(_on_loot_revealed.bind(hud))
+		loot.treasure_opened.connect(_on_treasure_opened.bind(hud))
+
+
+func _on_treasure_opened_sfx(item: Dictionary) -> void:
+	Sfx.play_world("loot_reveal", item.get("position", Vector3.ZERO), 0.0, 4.0)
+
+
+func _on_treasure_opened(item: Dictionary, hud: Hud) -> void:
+	var state := Net.local_state()
+	if state == null or int(item.get("owner", 0)) != state.player_id:
+		return
+	hud.announce_treasure(int(item.get("value", 0)), state.treasure_finds)
 
 
 func _on_loot_revealed_sfx(item: Dictionary) -> void:

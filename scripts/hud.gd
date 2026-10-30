@@ -25,6 +25,7 @@ var _chime: AudioStreamPlayer
 var _pings_left := 0
 var _ping_timer := 0.0
 var _detector_status: Label
+var _treasure: Label
 var _status_text := ""
 
 var _banner: Label
@@ -83,6 +84,12 @@ func _build() -> void:
 	_detector_status.name = "DetectorStatus"
 	_detector_status.position = Vector2(24, 148)
 	root.add_child(_detector_status)
+
+	# Treasure hunt line: only visible while a bought map's chest is still buried.
+	_treasure = _make_label(16, Color(1.0, 0.86, 0.42, 0.95))
+	_treasure.name = "Treasure"
+	_treasure.position = Vector2(24, 172)
+	root.add_child(_treasure)
 
 	_crosshair = _make_label(26, Color(1, 1, 1, 0.85))
 	_crosshair.name = "Crosshair"
@@ -415,6 +422,29 @@ func _process(delta: float) -> void:
 			_pings_left -= 1
 			_ping_timer = 0.13 if _pings_left > 0 else 0.0
 
+	_update_treasure_line()
+
+
+## The treasure line lives above the detector readout while a chest is buried.
+## It counts down the distance to the light shaft, so a big beach still reads as
+## "you are getting warmer" instead of an empty search.
+func _update_treasure_line() -> void:
+	if _treasure == null:
+		return
+	if _loot == null:
+		_loot = get_tree().get_first_node_in_group("loot_manager") as LootManager
+	if _loot == null or _player_node == null:
+		_treasure.text = ""
+		return
+	var distance := _loot.treasure_distance(_player_node.global_position)
+	if is_inf(distance):
+		_treasure.text = ""
+		return
+	if distance <= LootManager.TREASURE_BEACON_RADIUS:
+		_treasure.text = "TREASURE  -  dig here, it is deep"
+	else:
+		_treasure.text = "TREASURE  %d m" % roundi(distance)
+
 
 func refresh() -> void:
 	if _player == null:
@@ -427,6 +457,11 @@ func refresh() -> void:
 		var tier := _player.tiers[next_index]
 		next_line = "Next: %s  (Lv %d / $%d)  at the market" % [
 			tier.display_name, tier.level_required, int(tier.money_required)]
+	else:
+		# The endgame: after the last shovel the market sells treasure maps, so the
+		# "what now?" line keeps pointing at something.
+		next_line = "Endgame: Treasure Map  ($%d)  at the market" % int(
+			PlayerState.TREASURE_MAP_PRICE)
 	_stats.text = "\n".join([
 		"Lv %d   $%d   %s" % [_player.current_level, int(_player.current_money), equipment.display_name],
 		"XP %.0f / %d" % [_player.current_xp, int(xp_needed)],
@@ -452,7 +487,25 @@ func flash(text: String) -> void:
 
 ## Big gold banner + chime when a ring is uncovered. Wired from main.gd.
 func announce_ring(display_name: String, value: int) -> void:
-	_banner.text = "%s FOUND!    $%d" % [display_name.to_upper(), value]
+	_announce("%s FOUND!    $%d" % [display_name.to_upper(), value])
+	if _chime != null:
+		_chime.play()
+	flash("Press E to take it before someone else does")
+
+
+## The endgame moment: a chest is opened. Deliberately louder and longer than a
+## ring, with the payout and how many chests this beachcomber has found so far.
+func announce_treasure(value: int, finds: int) -> void:
+	_announce("THE GALLEON'S HOLD!    $%d" % value)
+	if _chime != null:
+		_chime.play()
+	flash(("Chest %d opened.  Spend it on another map at the market." % finds)
+		if finds > 1 else "You found the first chest on this beach. Legend!")
+
+
+## Shared banner animation.
+func _announce(text: String) -> void:
+	_banner.text = text
 	if _banner_tween != null and _banner_tween.is_valid():
 		_banner_tween.kill()
 	_banner.modulate.a = 0.0
@@ -463,9 +516,6 @@ func announce_ring(display_name: String, value: int) -> void:
 		.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 	_banner_tween.tween_interval(1.7)
 	_banner_tween.tween_property(_banner, "modulate:a", 0.0, 0.5)
-	if _chime != null:
-		_chime.play()
-	flash("Press E to take it before someone else does")
 
 
 ## One detector use = a short three-beep sweep. It never shows a distance or a

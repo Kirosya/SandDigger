@@ -40,6 +40,19 @@ tree, including shop rows and the lobby list built at runtime.
 There is one master volume only (`Settings` in the menu). Separate SFX/ambience sliders
 were intentionally skipped: one slider is enough for a build this size.
 
+## Settings, in both menus
+
+`scenes/settings_panel.tscn` + `scripts/settings_panel.gd` (`class_name SettingsPanel`) is
+one scene used twice: by the main menu and by the pause overlay, so the two screens can
+never drift apart. It holds the mouse sensitivity slider, the master volume slider and the
+fullscreen checkbox, writes every change straight into the `GameSettings` autoload (so a
+slider is heard while the beach is paused) and writes `user://settings.cfg` once, when the
+panel closes — not on every pixel of a drag.
+
+The panel is a plain `Control`: the owner decides what Esc means. In-game the pause menu
+closes the panel first and only then unpauses, and `open()` / `close()` / the `closed`
+signal keep the focus handling on the owner's side.
+
 ## Feedback
 
 `scripts/fx.gd` (autoload `Fx`) spawns one short `SandPuff` (GPUParticles3D) per dig,
@@ -57,7 +70,8 @@ One profile per machine, at `user://profile.cfg` (Windows:
 
 - lifetime XP and money,
 - equipment tier index and whether the detector was bought,
-- the 7 bag slots, item ids/names/kinds/values included.
+- the 7 bag slots, item ids/names/kinds/values included,
+- how many treasure chests this beachcomber has opened.
 
 The beach itself is now saved as well, in a second file next to the profile
 (`user://beach.save`, see the next section).
@@ -108,12 +122,51 @@ random file, a decompression failure or a wrong vertex count all mean "no beach"
 keeps the freshly generated one. Heights are clamped to the beach's real range (sea floor
 to flat sand), so even a hand-edited save can only make holes, never spikes.
 
-The loot snapshot is deliberately minimal — claimed ids plus the tide-spawned items. The
+The loot snapshot is deliberately minimal - claimed ids, the tide-spawned items and the
+unopened treasure chest if one is out. The
 200-item scatter comes from a fixed seed on every peer, so it never needs saving; revealed
 state is recomputed from the sand instead of trusted.
 
 `Profile.world_path_override` points the tests at a scratch file, and `beach_test` drives
 the real `main._save_world()` / `main._load_world()` path rather than re-implementing it.
+
+## The endgame: treasure maps
+
+The shovel chain ends at the Earth Shovel, and for a while that was the end of the
+economy: money kept coming in with nothing left to buy. The market's fifth row fixes that
+with a repeatable loop that gives the deepest dig a purpose.
+
+| constant | value | meaning |
+| --- | --- | --- |
+| `PlayerState.TREASURE_TIER_REQUIRED` | 3 | the map is only sold once the Earth Shovel is owned |
+| `PlayerState.TREASURE_MAP_PRICE` | $400 | the map, paid up front |
+| `PlayerState.TREASURE_FIRST_PAYOUT` | $1500 | the first chest a profile ever opens |
+| `PlayerState.TREASURE_PAYOUT_MIN/MAX` | $1000–$1400 | every chest after that |
+| `LootManager.TREASURE_DEPTH` | 1.85 m | the chest's depth (`SandTerrain.MAX_DEPTH` is 2.0) |
+| `LootManager.TREASURE_BEACON_RADIUS` | 3.6 m | the ring the map draws on the sand |
+
+Buying a map has `LootManager.spawn_treasure()` bury a **Sunken Chest** in dry sand, clear
+of the spawn and the stalls, at a random spot with a fixed payout for that hunt. The map
+does not give the exact point: a slim gold beam marks the centre and a ring shows the area,
+so the detector still has a job inside it. Only one map can be out at a time.
+
+The chest is an ordinary `LootItem` with `is_treasure = true`, so it reuses everything the
+trash already has: it is hidden by the sand above it, revealed by `dig_at` cutting past its
+depth, claimed first-wins by the host, and it travels to late joiners and into the save file
+(the snapshot gained a `treasure` key next to `claimed` and `sea`). Two things differ:
+
+- a claim pays **straight into money** via `PlayerState.register_treasure_find()` instead
+  of putting an item in the bag — a chest would fill half the bag on its own,
+- the find count (`treasure_finds`) is persisted, so the first-find payout really is once
+  per profile.
+
+Feedback needs no new RPC either: `LootManager.treasure_opened` already reaches every peer,
+the HUD turns it into a banner with the payout and the running chest count, everyone hears
+the world sound, and the beacon is dropped on every machine by the claim itself.
+
+An unopened chest survives a restart with its position, payout and light, because it is in
+the `treasure` key of the loot snapshot and the saved heightmap decides whether it is
+already uncovered. Once opened it is a claimed id, so it never comes back.
 
 ## Tests
 
@@ -121,6 +174,7 @@ the real `main._save_world()` / `main._load_world()` path rather than re-impleme
 godot --headless --path . res://tests/sfx_test.tscn       # streams, tier->sound, puffs, buttons, surf
 godot --headless --path . res://tests/profile_test.tscn   # round trip, damaged files, derived values, bag
 godot --headless --path . res://tests/beach_test.tscn     # save/restore a real dug beach, damaged files
+godot --headless --path . res://tests/treasure_test.tscn  # map offer, deep chest, payout, saved chest
 ```
 
 Sound output cannot be heard headless, so the assertions check which stream was handed

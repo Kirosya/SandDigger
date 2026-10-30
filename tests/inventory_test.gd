@@ -75,6 +75,10 @@ func _ready() -> void:
 	_check("new loot fills the first empty slot",
 		str(state.bag_slots[2].get("name", "")) == "New Junk")
 	_check("the bag is full again", state.carried_count() == PlayerState.INVENTORY_SLOTS)
+	# The cursor was still on the emptied slot, so the new item landed there and
+	# is in hand straight away instead of hiding behind the selection.
+	_check("new loot on the cursor slot lands in hand", state.held_slot == 2)
+	state.set_held_slot(-1)
 
 	# --- Detector is a bought hand tool ------------------------------------
 	_check("no detector at the start", not state.has_detector)
@@ -236,14 +240,26 @@ func _ready() -> void:
 		state.selected_slot == PlayerState.SLOT_SHOVEL and player.spoon_pivot.visible)
 	_check("the pickup message can name that slot", pickup_slot == 2)
 
-	# Even with the cursor parked on an empty slot the pickup is automatic: the
-	# item takes the free slot and the hand stays empty on the slot chosen.
+	# With the cursor parked on a free slot, the item lands there and must appear
+	# in the hand at once: the player is looking at that slot, so an invisible
+	# pickup reads as a bug. No re-selecting the slot to make it show.
 	dig._select_hotbar(PlayerState.FIRST_BAG_SLOT + 6)
 	state.add_loot({"id": 901, "name": "Another", "kind": "can", "value": 9.0})
 	_check("a pickup never needs an empty slot to be selected first",
 		dig._slot_of_item(901) >= 0)
 	_check("a pickup does not move the cursor",
 		state.selected_slot == PlayerState.FIRST_BAG_SLOT + 6)
+	_check("loot landing on the selected slot shows up in hand",
+		state.held_slot == 6 and not state.is_hand_empty()
+		and str(state.held_item().get("name", "")) == "Another")
+	await get_tree().process_frame
+	_check("the hand visual holds the fresh pickup",
+		player.item_pivot.visible and not player.spoon_pivot.visible)
+
+	# The same slot stowed by hand still means empty hands: the pickup rule only
+	# applies while the item is arriving, not to a deliberately emptied hand.
+	state.put_away()
+	_check("stowing the pickup empties the hand again", state.is_hand_empty())
 
 	# --- Sequential shovel upgrades ----------------------------------------
 	state.add_money(50.0)
