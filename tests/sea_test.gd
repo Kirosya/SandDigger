@@ -115,6 +115,7 @@ func _ready() -> void:
 	_check("tide rises to high water", sea.level > level_before + 0.3)
 	_check("high tide pushes the waterline inland", sea.shoreline_z > shore_before + 0.5)
 	_check("tide range is clearly visible", Sea.TIDE_HIGH - Sea.TIDE_LOW >= 0.9)
+	_check("the waterline swings miles up the beach", sea.shoreline_z - shore_before > 10.0)
 	_check("wet sand band follows the waterline",
 		absf(terrain.wet_line_z - sea.shoreline_z) < 0.25)
 
@@ -149,10 +150,16 @@ func _ready() -> void:
 	sea._update_tide(0.0)
 	# Kept off to the side: sea trash drifts in over x = -14..14 and the ebb test
 	# parks a piece right on the waterline, where this pit would be.
-	var shore_pit := Vector3(22.0, 0.0, -16.0)
+	var shore_pit := Vector3(22.0, 0.0, -22.0)
 	for i in 40:
 		terrain.dig_at(shore_pit, 3.0, 2.0)
-	sea._update_tide(0.0)
+	# Rebuild the flood mask but do not move the front: the hole is dry until the
+	# water has actually travelled in from the rim.
+	sea._refresh_flood()
+	_check("a fresh hole is not full the instant it is dug",
+		not sea.is_flooded_at(shore_pit))
+	# Let the water front travel in from the rim.
+	sea._spread_flood(3.0)
 	print("SEA shore pit floor=%.2f depth=%.2f flooded=%s (waterline %.2f)" % [
 		terrain.get_height_at(shore_pit), sea.water_depth_at(shore_pit),
 		str(sea.is_flooded_at(shore_pit)), sea.shoreline_z])

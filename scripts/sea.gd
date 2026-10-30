@@ -13,10 +13,11 @@ extends Node3D
 signal tide_turned(rising: bool)
 
 ## Water height in metres. The beach is at y = 0, so both values are below it.
-## The range is deliberately wide: a metre of tide walks the waterline several
-## metres up and down the shallow shore, which is what makes it visible.
-const TIDE_LOW := -1.15
-const TIDE_HIGH := -0.06
+## The range is deliberately wide: over two metres of tide walks the waterline
+## the better part of twenty metres up and down the shallow shore, so the sea
+## really does pull back and leave the beach (and any hole in it) draining.
+const TIDE_LOW := -2.30
+const TIDE_HIGH := -0.10
 ## One full low -> high -> low cycle, in seconds.
 const TIDE_PERIOD := 60.0
 ## How wide the sea is (X) and how far out it reaches (Z). The plane has to span
@@ -62,9 +63,16 @@ var _was_rising := true
 var _terrain: SandTerrain
 var _material: ShaderMaterial
 var _water: MeshInstance3D
-## 1 where the sea reaches the sand at the current tide, 0 where it cannot.
+## 1 where the sea has actually reached the sand, 0 where it has not. Grows from
+## the edge over a few frames, see `_spread_flood`.
 var _flood := PackedByteArray()
+## 1 where the tide *could* reach at this level. The flood fill runs on this.
+var _target_flood := PackedByteArray()
+## Cells the water front is about to move into.
+var _frontier := PackedInt32Array()
 var _flood_texture: ImageTexture
+var _flood_started := false
+var _spread_timer := 0.0
 var _flood_revision := -1
 var _flood_level := 999.0
 var _textures_bound := false
@@ -104,6 +112,7 @@ func _update_tide(delta: float) -> void:
 		_material.set_shader_parameter("water_level", level)
 	_bind_terrain_textures()
 	_refresh_flood()
+	_spread_flood(delta)
 	_update_shoreline()
 	if rising != _was_rising:
 		_was_rising = rising
@@ -137,46 +146,143 @@ func is_flooded_at(world_pos: Vector3) -> bool:
 	return _flood[gz * grid + gx] == 1
 
 
+## How fast the water front creeps into a fresh hole: one 0.5 m ring of sand per
+## this many seconds. A crater floods from its rim inward over a few seconds
+## instead of popping full the instant it is dug, which is what a wave pouring
+## over the edge looks like.
+const SPREAD_STEP := 0.12
 ## Flood fill: which cells of the sand the sea can reach. A cell is wet when it is
 ## below the water level and joined to the open sea through other wet cells, so
-## a pit dug at the shore fills up and a pit dug inland stays dry. Recomputed
-## only when the sand or the tide actually changed.
+## a pit dug at the shore fills up and a pit dug inland stays dry.
+##
+## Two masks are kept: `_target_flood` is what the tide could reach right now and
+## is recomputed whenever the sand or the level changes; `_flood` is what is drawn
+## and only ever *grows* toward the target one ring at a time, so water has to
+## travel in from the edge. Draining is immediate - the sea pulls back when it
+## pulls back.
 func _refresh_flood() -> void:
 	if _terrain == null:
 		return
 	if _flood_revision == _terrain.revision and absf(_flood_level - level) < 0.02:
 		return
+	# Only a *dig* has to be flooded slowly. A tide change just walks the
+	# waterline up the beach, and the shader's depth test already draws that
+	# smoothly - animating it would put a straight line of water across the surf.
+	var dug := _flood_started and _flood_revision != _terrain.revision
 	_flood_revision = _terrain.revision
 	_flood_level = level
 	var grid := SandTerrain.GRID_SIZE
 	var heights := _terrain.heights
-	if _flood.size() != grid * grid:
+	if _target_flood.size() != grid * grid:
+		_target_flood.resize(grid * grid)
 		_flood.resize(grid * grid)
-	_flood.fill(0)
+		_flood.fill(0)
+		_target_flood.fill(0)
+		_flood_started = false
+	_target_flood.fill(0)
 	var limit := level - FLOOD_EPSILON
 	# Seed from the seaward edge of the heightmap (row 0 is the most -Z one).
 	var stack := PackedInt32Array()
 	for x in grid:
 		if heights[x] < limit:
-			_flood[x] = 1
+			_target_flood[x] = 1
 			stack.append(x)
 	while not stack.is_empty():
 		var index := stack[stack.size() - 1]
 		stack.remove_at(stack.size() - 1)
 		var z := index / grid
 		var x := index - z * grid
-		if x > 0 and _flood[index - 1] == 0 and heights[index - 1] < limit:
-			_flood[index - 1] = 1
+		if x > 0 and _target_flood[index - 1] == 0 and heights[index - 1] < limit:
+			_target_flood[index - 1] = 1
 			stack.append(index - 1)
-		if x < grid - 1 and _flood[index + 1] == 0 and heights[index + 1] < limit:
-			_flood[index + 1] = 1
+		if x < grid - 1 and _target_flood[index + 1] == 0 and heights[index + 1] < limit:
+			_target_flood[index + 1] = 1
 			stack.append(index + 1)
-		if z > 0 and _flood[index - grid] == 0 and heights[index - grid] < limit:
-			_flood[index - grid] = 1
+		if z > 0 and _target_flood[index - grid] == 0 and heights[index - grid] < limit:
+			_target_flood[index - grid] = 1
 			stack.append(index - grid)
-		if z < grid - 1 and _flood[index + grid] == 0 and heights[index + grid] < limit:
-			_flood[index + grid] = 1
+		if z < grid - 1 and _target_flood[index + grid] == 0 and heights[index + grid] < limit:
+			_target_flood[index + grid] = 1
 			stack.append(index + grid)
+
+	if not dug:
+		# First frame, or the tide moved: the sea is simply already where it is.
+		_flood_started = true
+		_flood = _target_flood.duplicate()
+		_frontier.clear()
+		_upload_flood()
+		return
+
+	# Ebb: sand the sea no longer reaches loses its water at once.
+	var drained := false
+	for index in grid * grid:
+		if _flood[index] == 1 and _target_flood[index] == 0:
+			_flood[index] = 0
+			drained = true
+	# Whatever the tide has newly reached waits for the front to arrive.
+	_frontier.clear()
+	for index in grid * grid:
+		if _target_flood[index] == 1 and _flood[index] == 0 and _touches_water(index):
+			_frontier.append(index)
+	if drained:
+		_upload_flood()
+
+
+## True when any neighbour of `index` is already under water.
+func _touches_water(index: int) -> bool:
+	var grid := SandTerrain.GRID_SIZE
+	var z := index / grid
+	var x := index - z * grid
+	if x > 0 and _flood[index - 1] == 1:
+		return true
+	if x < grid - 1 and _flood[index + 1] == 1:
+		return true
+	if z > 0 and _flood[index - grid] == 1:
+		return true
+	if z < grid - 1 and _flood[index + grid] == 1:
+		return true
+	return false
+
+
+## Advances the water front. One ring of 0.5 m cells per `SPREAD_STEP` seconds, so
+## a hole fills in from the edge instead of all at once.
+func _spread_flood(delta: float) -> void:
+	if _frontier.is_empty():
+		return
+	_spread_timer -= delta
+	var steps := 0
+	while _spread_timer <= 0.0 and not _frontier.is_empty() and steps < 512:
+		_spread_timer += SPREAD_STEP
+		steps += 1
+		_grow_one_ring()
+
+
+func _grow_one_ring() -> void:
+	var grid := SandTerrain.GRID_SIZE
+	var next := PackedInt32Array()
+	var changed := false
+	for index in _frontier:
+		if _flood[index] == 1 or _target_flood[index] == 0:
+			continue
+		_flood[index] = 1
+		changed = true
+		var z := index / grid
+		var x := index - z * grid
+		if x > 0 and _target_flood[index - 1] == 1 and _flood[index - 1] == 0:
+			next.append(index - 1)
+		if x < grid - 1 and _target_flood[index + 1] == 1 and _flood[index + 1] == 0:
+			next.append(index + 1)
+		if z > 0 and _target_flood[index - grid] == 1 and _flood[index - grid] == 0:
+			next.append(index - grid)
+		if z < grid - 1 and _target_flood[index + grid] == 1 and _flood[index + grid] == 0:
+			next.append(index + grid)
+	_frontier = next
+	if changed:
+		_upload_flood()
+
+
+func _upload_flood() -> void:
+	var grid := SandTerrain.GRID_SIZE
 	var bytes := PackedByteArray()
 	bytes.resize(grid * grid)
 	for i in grid * grid:
@@ -210,12 +316,15 @@ func _bind_terrain_textures() -> void:
 func _update_veil(delta: float) -> void:
 	if _veil == null:
 		return
-	var under := false
+	var under := 0.0
 	var camera := get_viewport().get_camera_3d()
 	if camera != null:
 		var eye := camera.global_position
-		under = eye.y < level - 0.02 and is_flooded_at(eye)
-	_veil_alpha = move_toward(_veil_alpha, 1.0 if under else 0.0, delta * 2.5)
+		if is_flooded_at(eye):
+			# Shallow wading gets a light tint; a few centimetres under the
+			# surface is still "under water", so ramp in over the first 0.8 m.
+			under = clampf((level - eye.y) / 0.8, 0.0, 1.0)
+	_veil_alpha = move_toward(_veil_alpha, under, delta * 2.5)
 	_veil.modulate.a = _veil_alpha
 	_veil.visible = _veil_alpha > 0.002
 	if _env != null:

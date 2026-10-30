@@ -286,7 +286,14 @@ decides, per pixel, whether the sea is there:
   water.
 * `Sea._refresh_flood()` runs a flood fill over that heightmap from the open sea:
   a cell is wet when it is below the tide **and** joined to the open sea through
-  other wet cells. The result goes to the shader as `flood_mask` (R8).
+  other wet cells. That mask (`_target_flood`) is what the tide could reach.
+* A second mask, `_flood`, is what the shader is actually given (`flood_mask`,
+  R8). It only ever **grows** toward the target, one 0.5 m ring of cells every
+  `Sea.SPREAD_STEP` (0.12 s) from the edge of the water, so a fresh hole floods
+  from its rim inward over a few seconds instead of popping full the instant it
+  is dug. Ebb is immediate: the sea pulls back as fast as the tide drops. A tide
+  change alone snaps the mask (the moving waterline is already smooth in the
+  shader), only a **dig** starts a front.
 * A fragment is discarded when the sand there is above the tide, or when it is
   below the tide but not reachable. So a pit dug at the shore fills up to sea
   level, a hole dug in the middle of the beach stays bone dry, and a pit that
@@ -294,6 +301,10 @@ decides, per pixel, whether the sea is there:
 * Foam and the deep colour follow the **water depth** (`foam_depth` 0.30 m,
   `deep_depth` 2.0 m) instead of the distance from the waterline, so they look
   right on the open shore and on the rim of a flooded pit alike.
+* The tide range is deliberately wide (`TIDE_LOW` -2.30, `TIDE_HIGH` -0.10 m).
+  The shore slope is shallow, so the waterline walks about 13 m up and down the
+  beach over one 60 s cycle: the sea visibly pulls out, and a shallow pit drains
+  with it instead of sitting full forever.
 
 The surface is double sided (`cull_disabled`) and the fragment shader flips
 `NORMAL` on the back face, so looking up from inside the water shows a bright,
@@ -301,8 +312,11 @@ nearly opaque lid instead of the sky through a paper-thin sheet. While the camer
 is under the water (`Sea.is_flooded_at` on the camera, i.e. below the tide *and*
 inside a flooded cell) the sea fades in a blue-green screen veil
 (`Sea.UNDERWATER_COLOR`, layer 5, under the HUD) and swaps the scene fog for the
-water murk (`UNDERWATER_FOG_DENSITY` 0.11). Standing at the bottom of a flooded
-pit therefore looks like water, not like dry sand under a blue lid.
+water murk (`UNDERWATER_FOG_DENSITY` 0.11). The veil ramps in over the first
+0.8 m of depth (`Sea._update_veil`), so wading with your eyes just under the
+surface only tints the screen while the bottom of a flooded pit goes fully
+under. Standing at the bottom of a flooded pit therefore looks like water, not
+like dry sand under a blue lid.
 
 ## The endgame: treasure maps
 
@@ -348,8 +362,8 @@ godot --headless --path . res://tests/sfx_test.tscn       # streams, tier->sound
 godot --headless --path . res://tests/profile_test.tscn   # round trip, damaged files, derived values, bag
 godot --headless --path . res://tests/beach_test.tscn     # save/restore a real dug beach, damaged files
 godot --headless --path . res://tests/treasure_test.tscn  # map offer, deep chest, payout, saved chest
-godot --headless --path . res://tests/sea_test.tscn       # beach profile, tide, seabed clip, surf junk, ebb sink, pit flooding
-godot --path . res://tests/sea_shot.tscn                  # visual: the sea, plus a flooded pit from the rim and from under water
+godot --headless --path . res://tests/sea_test.tscn       # beach profile, tide, seabed clip, surf junk, ebb sink, pit flooding (and that a fresh pit fills from its rim)
+godot --path . res://tests/sea_shot.tscn                  # visual: low tide, high tide, a pit while it fills and full, and from under water
 ```
 
 Sound output cannot be heard headless, so the assertions check which stream was handed
