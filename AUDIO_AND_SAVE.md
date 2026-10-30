@@ -276,28 +276,42 @@ edge - the "dark blue area inside the beach". It is now only what it was meant t
 be: the floor under the open water that keeps the transparent surface from fading
 into the sky at the horizon.
 
-The water plane is no longer masked off with a straight Z cut. It now spans the
-whole beach (`Sea.WATER_INLAND_Z = 32`, `Sea.WATER_SPAN_Z = 460`) and the shader
-decides, per pixel, whether the sea is there:
+There is no mask any more: the water inside the sand is a real shallow-water
+simulation on the same 128x128 grid as the heightmap. Each half-metre cell holds
+one number, `Sea._depth`, its water depth, and every 1/20 s (`WATER_STEP`) water
+runs downhill from one cell into its lower neighbours. Volume is conserved except
+at the sea, which is an endless source and sink at the tide height, and in the
+sand, which drinks.
 
 * `SandTerrain.height_texture` is a live `FORMAT_RF` copy of the 128x128 heightmap
   (`SandTerrain.revision` bumps on every dig). The sea binds it plus the world
   rectangle it covers, so the shader knows how high the sand is under every bit of
-  water.
-* `Sea._refresh_flood()` runs a flood fill over that heightmap from the open sea:
-  a cell is wet when it is below the tide **and** joined to the open sea through
-  other wet cells. That mask (`_target_flood`) is what the tide could reach.
-* A second mask, `_flood`, is what the shader is actually given (`flood_mask`,
-  R8). It only ever **grows** toward the target, one 0.5 m ring of cells every
-  `Sea.SPREAD_STEP` (0.12 s) from the edge of the water, so a fresh hole floods
-  from its rim inward over a few seconds instead of popping full the instant it
-  is dug. Ebb is immediate: the sea pulls back as fast as the tide drops. A tide
-  change alone snaps the mask (the moving waterline is already smooth in the
-  shader), only a **dig** starts a front.
-* A fragment is discarded when the sand there is above the tide, or when it is
-  below the tide but not reachable. So a pit dug at the shore fills up to sea
-  level, a hole dug in the middle of the beach stays bone dry, and a pit that
-  only breaches the waterline at high tide fills and drains with the tide.
+  water. `Sea._depth` is uploaded next to it as `water_depth` every frame.
+* `Sea._flow_step` moves water from a cell to each lower neighbour: it compares
+  water **surfaces** (`height + depth`), sends `FLOW_SHARE` (45%) of the head over,
+  capped at `FLOW_SPEED` (6 m/s), and re-reads its own surface after every move.
+  That last detail matters - with a stale surface the sheet sloshes back and forth
+  forever and a cut-off pool keeps a permanent tilt instead of levelling.
+* A cell that is undug (`absf(h - base) < 0.02`) and below the tide is the open
+  sea: it is not simulated, and any simulated cell touching it is `_feed`-marked
+  and topped up straight from the tide. That is how a pit fills over its rim,
+  through a breach, or from the far end of a trench - the water really does
+  arrive from where it can, and the surface climbs from the bottom.
+* When the tide drops below the rim the feed stops: the pool is on its own, and
+  what is up on a ledge runs down to the lowest point it can reach (a 12 m crater
+  levels to within a few centimetres in about 10 s).
+* The sand then soaks the pool away. Every wet cell loses `SEEP_MIN + depth *
+  SEEP_RATE` per second (0.004 m/s film, 5%/s proportional), which empties a
+  knee-deep puddle in seconds and a 7 m crater in about a minute. Fed cells are
+  topped back up, so the shore does not drain while the tide is in.
+* Only live cells cost anything: `_seed_dug_area` adds the dirty rectangle of a
+  dig plus a margin and flow activates cells as it reaches them, so a step is
+  linear in the wet cells (about 2.5 ms for 500 cells), not in the grid.
+* The surface is drawn by one mesh that follows the sand grid: each vertex is
+  raised by the vertex shader to its cell's water surface, and the fragment
+  discards cells that are dry, so the sheet follows the sand instead of a flat
+  plane. The open sea beyond the sand is a separate plane
+  (`Sea.OpenWater`, `use_water_map = false`).
 * Foam and the deep colour follow the **water depth** (`foam_depth` 0.30 m,
   `deep_depth` 2.0 m) instead of the distance from the waterline, so they look
   right on the open shore and on the rim of a flooded pit alike.
@@ -362,8 +376,8 @@ godot --headless --path . res://tests/sfx_test.tscn       # streams, tier->sound
 godot --headless --path . res://tests/profile_test.tscn   # round trip, damaged files, derived values, bag
 godot --headless --path . res://tests/beach_test.tscn     # save/restore a real dug beach, damaged files
 godot --headless --path . res://tests/treasure_test.tscn  # map offer, deep chest, payout, saved chest
-godot --headless --path . res://tests/sea_test.tscn       # beach profile, tide, seabed clip, surf junk, ebb sink, pit flooding (and that a fresh pit fills from its rim)
-godot --path . res://tests/sea_shot.tscn                  # visual: low tide, high tide, a pit while it fills and full, and from under water
+godot --headless --path . res://tests/sea_test.tscn       # beach profile, tide, seabed clip, surf junk, ebb sink, pit flooding from its rim, and a cut-off pool levelling and soaking away
+godot --path . res://tests/sea_shot.tscn                  # visual: low tide, high tide, a pit while it fills and full, from under water, and cut off by the ebb
 ```
 
 Sound output cannot be heard headless, so the assertions check which stream was handed

@@ -44,24 +44,26 @@ func _ready() -> void:
 	print("SEA SHOT high tide=%.2f shore_z=%.1f" % [sea.level, sea.shoreline_z])
 	_save("res://proof_tide.png")
 
-	# A hole dug in the surf at high tide. It must fill from its rim inward, so
-	# grab a frame while the front is still on its way, then let it finish.
+	# A hole dug in the surf at high tide. Water has to pour in over the rim and
+	# fill it from the bottom up, so grab a frame while it is still climbing, then
+	# one when it has settled.
 	for i in DIGS:
 		terrain.dig_at(PIT, 4.0, 2.0)
-	sea._refresh_flood()
+	sea._refresh_water()
 	player.global_position = Vector3(PIT.x, 0.2, PIT.z + 6.5)
 	player.head.rotation.x = deg_to_rad(-22.0)
-	sea._spread_flood(0.6)
-	await get_tree().create_timer(0.4).timeout
-	print("SEA SHOT filling flooded=%s of %d cells" % [
-		str(sea.is_flooded_at(PIT)), sea._frontier.size()])
+	sea.settle_water(0.7)
+	await get_tree().create_timer(0.2).timeout
+	print("SEA SHOT filling floor=%.2f depth=%.2f flooded=%s" % [
+		terrain.get_height_at(PIT), sea.water_depth_at(PIT),
+		str(sea.is_flooded_at(PIT))])
 	_save("res://proof_pit_filling.png")
 
-	sea._spread_flood(6.0)
+	sea.settle_water(60.0)
 	print("SEA SHOT pit floor=%.2f depth=%.2f flooded=%s" % [
 		terrain.get_height_at(PIT), sea.water_depth_at(PIT),
 		str(sea.is_flooded_at(PIT))])
-	await get_tree().create_timer(0.4).timeout
+	await get_tree().create_timer(0.3).timeout
 	_save("res://proof_pit.png")
 
 	player.global_position = Vector3(PIT.x, terrain.get_height_at(PIT) + 0.1, PIT.z)
@@ -70,6 +72,17 @@ func _ready() -> void:
 	print("SEA SHOT eye=%.2f level=%.2f veil=%.2f" % [
 		player.head.global_position.y, sea.level, sea._veil_alpha])
 	_save("res://proof_pit_under.png")
+
+	# The tide goes out and cuts the hole off. What was up on the walls has to run
+	# down to the bottom, and the sand then slowly drinks it away.
+	sea._time = 0.0
+	sea._update_tide(0.0)
+	sea.settle_water(16.0)
+	player.global_position = Vector3(PIT.x, 0.2, PIT.z + 6.5)
+	player.head.rotation.x = deg_to_rad(-22.0)
+	await get_tree().create_timer(0.4).timeout
+	print("SEA SHOT cut off tide=%.2f depth=%.2f" % [sea.level, sea.water_depth_at(PIT)])
+	_save("res://proof_pit_cut_off.png")
 	get_tree().quit(0)
 
 

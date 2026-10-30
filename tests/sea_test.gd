@@ -1,4 +1,4 @@
-extends Node
+﻿extends Node
 ## Beach / sea / tide test on the real main scene.
 ##
 ## Verifies that the beach now slopes into the sea on the -Z side, that the tide
@@ -49,23 +49,30 @@ func _ready() -> void:
 	var water := sea.get_node_or_null("Water") as MeshInstance3D
 	_check("sea has a water surface", water != null)
 	if water != null:
-		var plane := water.mesh as PlaneMesh
-		var inland_edge := water.position.z + plane.size.y * 0.5
-		print("SEA water z=%.1f size_z=%.1f inland_edge=%.2f" % [
-			water.position.z, plane.size.y, inland_edge])
-		_check("water covers the whole beach so a hole can fill", inland_edge >= 30.0)
-		_check("water still reaches the horizon", plane.size.y >= 300.0)
+		# The beach half is a grid that follows the sand cells, so the surface
+		# can sit at the water height inside each hole.
+		var sand_edge := SandTerrain.HALF_GRID * SandTerrain.CELL_SIZE
+		var box := water.get_aabb()
+		print("SEA water grid x=%.1f..%.1f z=%.1f..%.1f" % [
+			box.position.x, box.end.x, box.position.z, box.end.z])
+		_check("water covers the whole sand grid",
+			box.position.x <= -sand_edge and box.end.x >= sand_edge
+			and box.position.z <= -sand_edge and box.end.z >= sand_edge)
+		var open := sea.get_node_or_null("OpenWater") as MeshInstance3D
+		_check("water still reaches the horizon", open != null)
+		if open != null:
+			var plane := open.mesh as PlaneMesh
+			_check("the open sea starts at the edge of the sand",
+				open.position.z + plane.size.y * 0.5 <= -sand_edge + 0.6)
+			_check("the open sea reaches the horizon", plane.size.y >= 300.0)
 
-		# The plane now lies under the whole beach, so the shader has to decide
-		# where the sea actually is: the sand heightmap says how high the ground
-		# is, and the flood fill says which holes the tide can reach.
 		var material := water.material_override as ShaderMaterial
 		_check("water is a shader", material != null)
 		if material != null:
 			_check("the water knows where the sand is",
 				material.get_shader_parameter("terrain_height") != null)
-			_check("the water knows which holes it can reach",
-				material.get_shader_parameter("flood_mask") != null)
+			_check("the water knows how deep every cell is",
+				material.get_shader_parameter("water_depth") != null)
 			_check("the water knows the tide height",
 				is_equal_approx(float(material.get_shader_parameter("water_level")),
 					sea.level))
@@ -143,9 +150,9 @@ func _ready() -> void:
 
 	# --- The sea fills the holes it can reach ------------------------------
 	# A pit dug at the shore is joined to the open sea (its rim reaches past the
-	# waterline), so the tide has to flood it all the way up to sea level. A pit
-	# dug in the middle of the beach is a closed bowl: its floor is well below sea
-	# level, but nothing connects it to the water, so it has to stay bone dry.
+	# waterline), so water pours in over that rim and fills it up to sea level. A
+	# pit dug in the middle of the beach is a closed bowl: its floor is well below
+	# sea level, but nothing connects it to the water, so it has to stay bone dry.
 	sea._time = 0.0
 	sea._update_tide(0.0)
 	# Kept off to the side: sea trash drifts in over x = -14..14 and the ebb test
@@ -153,13 +160,30 @@ func _ready() -> void:
 	var shore_pit := Vector3(22.0, 0.0, -22.0)
 	for i in 40:
 		terrain.dig_at(shore_pit, 3.0, 2.0)
-	# Rebuild the flood mask but do not move the front: the hole is dry until the
-	# water has actually travelled in from the rim.
-	sea._refresh_flood()
+	# Rebuild the map but do not run the flow: the hole is dry until the water
+	# has actually travelled in from the rim.
+	sea._refresh_water()
 	_check("a fresh hole is not full the instant it is dug",
 		not sea.is_flooded_at(shore_pit))
-	# Let the water front travel in from the rim.
-	sea._spread_flood(3.0)
+	var floor_before := sea.water_depth_at(shore_pit)
+	# A tenth of a second in, some water has run in, but the hole is nowhere near
+	# full: it fills over seconds, not in one frame.
+	sea.settle_water(0.1)
+	var early := sea.water_depth_at(shore_pit)
+	print("SEA shore pit after 0.1s depth=%.2f (was %.2f)" % [early, floor_before])
+	_check("the water runs in instead of appearing", early < 0.5)
+	# Half a second later it has climbed, and only after several seconds is the
+	# hole full. A pool that fills from its rim reads like that at every step.
+	sea.settle_water(0.4)
+	var middle := sea.water_depth_at(shore_pit)
+	sea.settle_water(6.0)
+	var late := sea.water_depth_at(shore_pit)
+	print("SEA shore pit depth 0.1s=%.2f 0.5s=%.2f 6s=%.2f" % [early, middle, late])
+	_check("the hole fills gradually, not all at once",
+		early <= middle and middle < late and late > 0.5)
+	# Let the flow settle. Water pours over the rim and fills the hole up to the
+	# tide, cell by cell.
+	sea.settle_water(20.0)
 	print("SEA shore pit floor=%.2f depth=%.2f flooded=%s (waterline %.2f)" % [
 		terrain.get_height_at(shore_pit), sea.water_depth_at(shore_pit),
 		str(sea.is_flooded_at(shore_pit)), sea.shoreline_z])
@@ -170,12 +194,14 @@ func _ready() -> void:
 	for i in 40:
 		terrain.dig_at(inland_pit, 3.0, 2.0)
 	sea._update_tide(0.0)
+	sea.settle_water(3.0)
 	print("SEA inland pit floor=%.2f depth=%.2f flooded=%s" % [
 		terrain.get_height_at(inland_pit), sea.water_depth_at(inland_pit),
 		str(sea.is_flooded_at(inland_pit))])
 	_check("a pit the sea cannot reach stays dry",
-		sea.water_depth_at(inland_pit) > 3.0
-		and not sea.is_flooded_at(inland_pit))
+		terrain.get_height_at(inland_pit) < sea.level - 3.0
+		and not sea.is_flooded_at(inland_pit)
+		and sea.water_depth_at(inland_pit) < 0.05)
 
 	# --- The water looks like water from the inside ------------------------
 	# A deep hole at the shore fills up at high tide. A camera down at the bottom
@@ -187,6 +213,7 @@ func _ready() -> void:
 	for i in 60:
 		terrain.dig_at(deep_pit, 4.0, 2.0)
 	sea._update_tide(0.0)
+	sea.settle_water(10.0)
 	var pit_floor := terrain.get_height_at(deep_pit)
 	var player := get_tree().get_first_node_in_group("player") as FirstPersonPlayer
 	_check("the test can look through the player camera", player != null)
@@ -206,6 +233,40 @@ func _ready() -> void:
 		sea._update_veil(1.0)
 		print("SEA back on the beach veil=%.2f" % sea._veil_alpha)
 		_check("the veil clears on dry land", sea._veil_alpha < 0.05)
+
+	# --- Water the tide left behind runs down, then soaks away -------------
+	# Take the tide out: the deep hole above is now cut off from the sea. What is
+	# left in it has to run down to a level surface in the bottom of the hole
+	# rather than sit up on the walls, and the sand then drinks it away instead of
+	# keeping the pool there forever.
+	var full_depth := sea.water_depth_at(deep_pit)
+	sea._time = 0.0
+	sea._update_tide(0.0)
+	sea.settle_water(16.0)
+	var centre := sea._cell_at(deep_pit)
+	var low := 999.0
+	var high := -999.0
+	var wet := 0
+	for dz in range(-8, 9):
+		for dx in range(-8, 9):
+			var i: int = centre + dz * SandTerrain.GRID_SIZE + dx
+			if sea._depth[i] > 0.05:
+				var s: float = terrain.heights[i] + sea._depth[i]
+				low = minf(low, s)
+				high = maxf(high, s)
+				wet += 1
+	print("SEA cut-off pool wet=%d surface %.2f..%.2f spread=%.2f" % [
+		wet, low, high, high - low])
+	_check("water left in a cut-off hole runs down to one level",
+		wet >= 100 and high - low < 0.25)
+
+	var levelled_depth := sea.water_depth_at(deep_pit)
+	sea.settle_water(40.0)
+	var soaked_depth := sea.water_depth_at(deep_pit)
+	print("SEA seep depth full=%.2f levelled=%.2f soaked=%.2f" % [
+		full_depth, levelled_depth, soaked_depth])
+	_check("the sand drinks a pool the tide left behind",
+		soaked_depth < levelled_depth and soaked_depth < full_depth * 0.5)
 
 	# --- The rising tide floats trash in on its own ------------------------
 	sea._time = Sea.TIDE_PERIOD * 0.25
