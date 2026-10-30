@@ -6,10 +6,13 @@ shader_type spatial;
 render_mode blend_mix, depth_draw_never, cull_back, diffuse_burley, specular_schlick_ggx;
 
 uniform vec4 shallow_color : source_color = vec4(0.15, 0.55, 0.60, 1.0);
-uniform vec4 deep_color : source_color = vec4(0.02, 0.14, 0.28, 1.0);
+// The deep colour stays in the same teal family as the shallows. A navy this
+// far from the beach read as a dark maroon band across the horizon, so the open
+// water now just gets a little deeper and greener instead of turning black.
+uniform vec4 deep_color : source_color = vec4(0.10, 0.36, 0.46, 1.0);
 uniform vec4 foam_color : source_color = vec4(0.96, 0.99, 1.0, 1.0);
 uniform float shallow_alpha = 0.42;
-uniform float deep_alpha = 0.94;
+uniform float deep_alpha = 0.82;
 uniform float foam_width = 2.2;
 uniform float wave_height = 0.03;
 // World Z of the waterline (more negative = further out to sea).

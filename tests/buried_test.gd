@@ -105,6 +105,32 @@ func _ready() -> void:
 	_expect("still rests on the sand", item.node.position.y,
 		minf(-item.depth, after_surface + 0.02), 0.001)
 
+	# --- Reach at depth ------------------------------------------------------
+	# A buried thing is metres below the spot on the beach it was buried at.
+	# Reach has to use where the item *is*, not that spot: this is what used to
+	# leave deep junk and every chest with an "[E]" that did nothing.
+	var deep := LootManager.LootItem.new()
+	deep.loot_id = 9001
+	deep.display_name = "Deep Test Idol"
+	deep.value = 500.0
+	deep.depth = 4.6
+	deep.buried_position = Vector3(12.0, 0.0, 6.0)
+	deep.node = Node3D.new()
+	loot._root.add_child(deep.node)
+	deep.node.position = Vector3(12.0, -4.6, 6.0)
+	deep.revealed = true
+	loot.loot.append(deep)
+
+	var at_bottom := Vector3(12.4, -4.6, 6.0)
+	_check("a deep item is claimable from the pit floor",
+		loot.nearest_claimable(at_bottom, 2.8) == deep)
+	_check("the surface-distance check would have missed it",
+		at_bottom.distance_to(deep.buried_position) > 2.8)
+	_check("walking away still loses the prompt",
+		loot.nearest_claimable(Vector3(18.0, -4.6, 6.0), 2.8) == null)
+	_check("a claim at the pit floor goes through",
+		loot.take_loot(deep.loot_id, 1) and deep.claimed)
+
 	_finish()
 
 

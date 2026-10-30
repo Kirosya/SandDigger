@@ -15,7 +15,7 @@ const GRID_SIZE := 128
 const CELL_SIZE := 0.5
 ## How far down a spot can be dug. Deep enough that a real shaft is possible and
 ## the endgame chest can hide well below the reach of the early shovels.
-const MAX_DEPTH := 6.0
+const MAX_DEPTH := 8.0
 
 ## --- Sand that does not stand in a wall ------------------------------------
 ##
@@ -35,6 +35,16 @@ const SLUMP_RELAX := 0.50
 ## How far below the natural sea bed a wet spot may be dug, so the surf never
 ## gets a hole punched through it.
 const SEA_DIG_MARGIN := 1.4
+
+## --- Sand packs harder the deeper you go -----------------------------------
+##
+## A shovel is at full strength on the surface and loses bite as the hole gets
+## deep: the sand is compacted, the swing has less room, and there is more of it
+## above you. `HARDEN_DEPTH` is how many metres of depth it takes to reach the
+## weakest the tool ever gets (`HARDEN_MIN`), so a top-tier shovel still works
+## down there, just far more slowly than on the beach.
+const HARDEN_DEPTH := 8.0
+const HARDEN_MIN := 0.40
 
 const HALF_GRID := (GRID_SIZE - 1) * 0.5
 const CELL_AREA := CELL_SIZE * CELL_SIZE
@@ -125,6 +135,12 @@ func _generate_beach() -> void:
 			base_heights[row + x] = height
 
 
+## How much of its nominal bite a shovel still gets at `world_pos`. Full power
+## on the surface, `HARDEN_MIN` at the bottom of the sand.
+func dig_power_at(world_pos: Vector3) -> float:
+	return clampf(1.0 + get_height_at(world_pos) / HARDEN_DEPTH, HARDEN_MIN, 1.0)
+
+
 ## Digs a smooth bowl into the sand at `world_pos`.
 ## Returns the removed volume in cubic metres (0 if nothing was removed).
 ##
@@ -141,6 +157,13 @@ func dig_at(world_pos: Vector3, radius: float, depth: float) -> float:
 	last_dig_changed = false
 	if radius <= 0.0 or depth <= 0.0:
 		return 0.0
+
+	# Deep sand is hard sand: the scoop (both its area and its bite) shrinks with
+	# the depth of the hole it is made in. Applied here, from the heightmap, so a
+	# client replaying the host call gets exactly the same scoop.
+	var power := dig_power_at(world_pos)
+	radius *= power
+	depth *= lerpf(1.0, power, 0.5)
 
 	var support := radius + CELL_SIZE
 	var local_pos := to_local(world_pos)

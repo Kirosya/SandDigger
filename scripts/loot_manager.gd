@@ -98,9 +98,15 @@ const SEA_TRASH_NAMES := [
 ]
 const SEA_SPAWN_INTERVAL := 4.0
 ## How many pieces may be bobbing in the surf at once.
-const SEA_MAX_FLOATING := 6
-## Total tide-delivered junk allowed in the world (stops the beach silting up).
-const SEA_MAX_TOTAL := 40
+const SEA_MAX_FLOATING := 4
+## Total tide-delivered junk allowed to lie on the beach at once. The sea is
+## generous with a clean shore and stingy with a littered one, but it never
+## silts the beach up completely.
+const SEA_MAX_TOTAL := 18
+## Each piece already lying ashore multiplies the wait before the next one is
+## delivered: at 0 pieces the sea washes something in every 4 s, at 10 it takes
+## almost half a minute. Clearing the beach speeds the sea straight back up.
+const SEA_LITTER_PENALTY := 0.8
 const SEA_DRIFT_SPEED := 0.7
 ## Floating junk is owned by the host; it streams its position to clients at
 ## this rate (only a handful of items are ever in the surf at once).
@@ -160,6 +166,17 @@ class LootItem:
 	## deeper and pays out through PlayerState instead of the bag.
 	var is_treasure := false
 	var node: Node3D
+	## The floating "found" label, kept so a re-reveal cannot stack a second one.
+	var label: Label3D
+
+	## Where the item really is: the visual node carries the depth (a buried
+	## antique sits metres below `buried_position`, which is only the spot on the
+	## beach). Reach checks must use this or a deep item becomes unreachable -
+	## standing on a chest at -5 m was 5 m away from its own position.
+	func world_position() -> Vector3:
+		if node != null and is_instance_valid(node):
+			return node.global_position
+		return Vector3(buried_position.x, -depth, buried_position.z)
 
 
 var loot: Array[LootItem] = []
@@ -201,10 +218,15 @@ func _process(delta: float) -> void:
 	_sea_spawn_timer -= delta
 	if _sea_spawn_timer > 0.0:
 		return
-	_sea_spawn_timer = SEA_SPAWN_INTERVAL
-	if _floating_count() >= SEA_MAX_FLOATING or _sea_trash_count() >= SEA_MAX_TOTAL:
+	# The more tide junk is already lying on the beach, the less the sea bothers
+	# to deliver more. Collecting it empties the beach and the sea speeds right
+	# back up, which is the pressure the player should feel.
+	var littered := _sea_trash_count()
+	if _floating_count() >= SEA_MAX_FLOATING or littered >= SEA_MAX_TOTAL:
+		_sea_spawn_timer = SEA_SPAWN_INTERVAL
 		return
 	_spawn_sea_trash()
+	_sea_spawn_timer = SEA_SPAWN_INTERVAL * (1.0 + float(littered) * SEA_LITTER_PENALTY)
 
 
 ## --- Claiming ------------------------------------------------------------
@@ -239,7 +261,7 @@ func _request_claim(loot_id: int, player_id: int) -> void:
 	var item := find_loot(loot_id)
 	if player == null or item == null:
 		return
-	if player.global_position.distance_to(item.buried_position) > CLAIM_RANGE:
+	if player.global_position.distance_to(item.world_position()) > CLAIM_RANGE:
 		return
 	_host_claim(loot_id, player_id)
 
@@ -434,7 +456,7 @@ func nearest_claimable(from: Vector3, max_distance: float) -> LootItem:
 	for item in loot:
 		if item.claimed or not item.revealed:
 			continue
-		var distance := from.distance_to(item.buried_position)
+		var distance := from.distance_to(item.world_position())
 		if distance < best_distance:
 			best_distance = distance
 			best = item
@@ -448,7 +470,7 @@ func nearest_loot(from: Vector3) -> LootItem:
 	for item in loot:
 		if item.claimed:
 			continue
-		var distance := from.distance_to(item.buried_position)
+		var distance := _flat_distance(from, item)
 		if distance < best_distance:
 			best_distance = distance
 			best = item
@@ -464,18 +486,26 @@ func nearest_hidden(from: Vector3) -> LootItem:
 	for item in loot:
 		if item.claimed or item.revealed:
 			continue
-		var distance := from.distance_to(item.buried_position)
+		var distance := _flat_distance(from, item)
 		if distance < best_distance:
 			best_distance = distance
 			best = item
 	return best
 
 
+## Horizontal distance to an item. The detector (and everything that is about
+## "how far away is it on the beach") ignores depth: standing on a 4 m pit must
+## not make the buried thing under your feet read 4 m away.
+func _flat_distance(from: Vector3, item: LootItem) -> float:
+	var spot := item.buried_position
+	return Vector2(from.x - spot.x, from.z - spot.z).length()
+
+
 func nearest_distance(from: Vector3) -> float:
 	var item := nearest_hidden(from)
 	if item == null:
 		return INF
-	return from.distance_to(item.buried_position)
+	return _flat_distance(from, item)
 
 
 ## 0..1 detector reading for the closest hidden item, wobbled by metal clutter
@@ -503,7 +533,7 @@ func metal_noise(from: Vector3, range: float = SIGNAL_RANGE) -> float:
 	for item in loot:
 		if item.claimed or not item.metal:
 			continue
-		var distance := from.distance_to(item.buried_position)
+		var distance := _flat_distance(from, item)
 		if distance >= range:
 			continue
 		weight += pow(1.0 - distance / range, SIGNAL_EXPONENT)
@@ -1087,11 +1117,13 @@ func _set_buried_height(item: LootItem, surface_height: float) -> void:
 ## uncover it again.
 func _rebury(item: LootItem) -> void:
 	item.revealed = false
-	if item.node == null:
-		return
-	for child in item.node.get_children():
-		if child is Label3D:
-			child.queue_free()
+	_drop_label(item)
+
+
+func _drop_label(item: LootItem) -> void:
+	if item.label != null and is_instance_valid(item.label):
+		item.label.queue_free()
+	item.label = null
 
 
 func _reveal(item: LootItem, surface_height: float, announce := true) -> void:
@@ -1101,8 +1133,14 @@ func _reveal(item: LootItem, surface_height: float, announce := true) -> void:
 	item.node.visible = true
 	_set_buried_height(item, surface_height)
 
+	# One label per item, ever: a re-reveal replaces the old one instead of
+	# stacking a second "[E]" over it.
+	_drop_label(item)
 	var label := Label3D.new()
-	label.text = "[E] %s" % item.display_name
+	# No "[E]" here. This label only says what the thing is; the "[E] Take ..."
+	# prompt is the HUD's job, because that one knows whether you are close
+	# enough to actually pick it up.
+	label.text = "%s  ($%d)" % [item.display_name, int(item.value)]
 	label.font_size = 40
 	label.pixel_size = 0.0045
 	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
@@ -1110,6 +1148,7 @@ func _reveal(item: LootItem, surface_height: float, announce := true) -> void:
 	label.modulate = Color(1.0, 0.95, 0.55)
 	label.position = Vector3(0.0, 0.42, 0.0)
 	item.node.add_child(label)
+	item.label = label
 
 	print("[loot] revealed '%s' at %s" % [item.display_name, str(item.buried_position)])
 	if announce:

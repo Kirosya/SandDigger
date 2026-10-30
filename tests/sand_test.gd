@@ -1,17 +1,21 @@
 extends Node3D
 ## Deep-sand physics test.
 ##
-## The beach is six metres of sand now, and sand does not stand in a wall: a
-## scoop makes the walls slide back into the hole. That behaviour is what the
-## whole dig loop is balanced around, so it gets its own regression test:
+## The beach is eight metres of sand now, and sand does not stand in a wall: a
+## scoop makes the walls slide back into the hole, and the deeper the hole gets
+## the harder the sand packs, so the same swing takes a smaller bite down there.
+## That behaviour is what the whole dig loop is balanced around, so it gets its
+## own regression test:
 ##
 ##   1. a narrow shaft cannot be sunk deep - the walls cave in and refill it,
 ##   2. the collapse conserves sand: the beach only loses what the shovel took,
 ##   3. the collapse is deterministic, so a client replaying `apply_dig` ends up
 ##      with exactly the host's heights (multiplayer safety),
 ##   4. a proper wide excavation does reach the chest band,
-##   5. a dig in the surf cannot punch through the sea bed,
-##   6. every scoop that really removed sand pays XP, and a fully refilled one
+##   5. deep sand really is harder than surface sand, and the surface keeps full
+##      power,
+##   6. a dig in the surf cannot punch through the sea bed,
+##   7. every scoop that really removed sand pays XP, and a fully refilled one
 ##      pays nothing.
 
 const SPOT := Vector3(0.0, 0.0, 5.0)
@@ -26,6 +30,7 @@ func _ready() -> void:
 	await _check_volume_conserved()
 	await _check_deterministic()
 	await _check_wide_pit_reaches_bottom()
+	await _check_depth_hardness()
 	await _check_sea_bed()
 	await _check_xp_matches_sand()
 
@@ -107,12 +112,13 @@ func _check_deterministic() -> void:
 
 
 ## The chest hides at 4.6 m: a Trench Spade must be able to get there, and it
-## has to take a real excavation rather than one scoop.
+## has to take a real excavation rather than one scoop. Below that, the top tier
+## must still be able to open the rest of the eight metres of sand.
 func _check_wide_pit_reaches_bottom() -> void:
 	var terrain := await _terrain()
 	var tier := EquipmentData.default_tiers()[TRENCH_SPADE]
 	var digs := 0
-	while terrain.get_height_at(SPOT) > -LootManager.TREASURE_DEPTH and digs < 260:
+	while terrain.get_height_at(SPOT) > -LootManager.TREASURE_DEPTH and digs < 400:
 		terrain.dig_at(SPOT, tier.radius, tier.depth)
 		digs += 1
 	var depth := terrain.get_height_at(SPOT)
@@ -121,7 +127,50 @@ func _check_wide_pit_reaches_bottom() -> void:
 	_check("it takes a real excavation", digs >= 20)
 	_check("no pit can go below the sand floor",
 		depth >= -SandTerrain.MAX_DEPTH - 0.001)
+
+	# The endgame shovel keeps going once the chest band is behind it: there is
+	# more beach under the chest than above it.
+	var top := EquipmentData.default_tiers()[EquipmentData.default_tiers().size() - 1]
+	var extra := 0
+	while terrain.get_height_at(SPOT) > -SandTerrain.MAX_DEPTH + 0.01 and extra < 500:
+		terrain.dig_at(SPOT, top.radius, top.depth)
+		extra += 1
+	var bottom := terrain.get_height_at(SPOT)
+	print("SAND %s reached %.2f m after %d more digs" % [top.display_name, bottom, extra])
+	_check("the top tier can open the deep sand", bottom <= -SandTerrain.MAX_DEPTH + 0.05)
+	_check("even the top tier stops at the sand floor", bottom >= -SandTerrain.MAX_DEPTH - 0.001)
+	_check("the sand is deeper than the chest band by a good margin",
+		SandTerrain.MAX_DEPTH >= LootManager.TREASURE_DEPTH + 2.0)
 	terrain.queue_free()
+
+
+## Sand packs harder the deeper the hole: the same swing takes a smaller scoop
+## at 4 m than it does on the surface, but it never stops biting entirely, and
+## the surface is always at full power.
+func _check_depth_hardness() -> void:
+	var surface := await _terrain()
+	var tier := EquipmentData.default_tiers()[TRENCH_SPADE]
+	var surface_power := surface.dig_power_at(SPOT)
+	var surface_volume := surface.dig_at(SPOT, tier.radius, tier.depth)
+	_check("the surface is dug at full power", is_equal_approx(surface_power, 1.0))
+
+	var deep := await _terrain()
+	var digs := 0
+	while deep.get_height_at(SPOT) > -4.0 and digs < 400:
+		deep.dig_at(SPOT, tier.radius, tier.depth)
+		digs += 1
+	var deep_power := deep.dig_power_at(SPOT)
+	var deep_volume := deep.dig_at(SPOT, tier.radius, tier.depth)
+	print("SAND power %.2f at %.2f m | scoop %.3f vs %.3f m3" % [
+		deep_power, deep.get_height_at(SPOT), surface_volume, deep_volume])
+	_check("the sand hardens with depth", deep_power <= 0.6)
+	_check("a deep scoop is much smaller than a surface one",
+		deep_volume < surface_volume * 0.5)
+	_check("the shovel still bites at depth", deep_volume > 0.0)
+	_check("hardening never stops the dig completely", SandTerrain.HARDEN_MIN > 0.0)
+	_check("hardening only starts below the surface", SandTerrain.HARDEN_DEPTH > 0.0)
+	surface.queue_free()
+	deep.queue_free()
 
 
 ## In the surf the sand keeps a floor a margin below the natural sea bed, so a
@@ -151,14 +200,22 @@ func _check_xp_matches_sand() -> void:
 	var tier := EquipmentData.default_tiers()[TRENCH_SPADE]
 	var volume := terrain.dig_at(SPOT, tier.radius, tier.depth)
 	_check("a first scoop pays XP", volume > 0.05)
-	# Dig the same spot until it is at the floor: the last scoop removes nothing.
-	for i in 400:
-		terrain.dig_at(SPOT, tier.radius, tier.depth)
-	var floor_volume := terrain.dig_at(SPOT, tier.radius, tier.depth)
-	print("SAND floor scoop volume %.4f m3" % floor_volume)
-	# Not exactly zero: the walls keep creeping in, so every scoop still takes a
-	# sliver. It must be negligible next to a real scoop.
-	_check("an exhausted pit pays almost nothing", floor_volume < volume * 0.05)
+	# Dig the same spot all the way to the sand floor with the best shovel: once
+	# the pit is exhausted the walls have nowhere left to fall from.
+	var top := EquipmentData.default_tiers()[EquipmentData.default_tiers().size() - 1]
+	var digs := 0
+	while terrain.get_height_at(SPOT) > -SandTerrain.MAX_DEPTH + 0.01 and digs < 600:
+		terrain.dig_at(SPOT, top.radius, top.depth)
+		digs += 1
+	for i in 200:
+		terrain.dig_at(SPOT, top.radius, top.depth)
+	var floor_volume := terrain.dig_at(SPOT, top.radius, top.depth)
+	print("SAND floor scoop volume %.4f m3 after %d digs to %.2f m" % [
+		floor_volume, digs + 201, terrain.get_height_at(SPOT)])
+	# Not exactly zero while the walls are still creeping in, but an exhausted
+	# pit must not be a sand farm: it has to pay (nearly) nothing.
+	_check("an exhausted pit pays almost nothing",
+		floor_volume < volume * 0.05)
 	# Even a scoop that nets nothing has to be broadcast when it moved sand, or
 	# the host and a client would end up with different beaches.
 	_check("a shape-changing scoop is flagged for broadcast",

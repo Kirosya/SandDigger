@@ -65,8 +65,10 @@ var tool_mode: int = TOOL_SHOVEL
 
 var _gravity: float = float(ProjectSettings.get_setting("physics/3d/default_gravity", 9.8))
 
-## Below this Y the player is considered lost (off the beach, out to sea).
-const FALL_LIMIT := -8.5
+## Below this Y the player is considered lost (off the beach, out to sea). It
+## sits a metre under the deepest legal pit (`SandTerrain.MAX_DEPTH`), so standing
+## at the bottom of a fully dug hole is never mistaken for falling out of the world.
+const FALL_LIMIT := -10.5
 var _third_person := false
 var _held_item: Dictionary = {}
 var _item_visual: MeshInstance3D

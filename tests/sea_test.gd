@@ -148,6 +148,34 @@ func _ready() -> void:
 		deepest = minf(deepest, other.buried_position.z)
 	_check("regular loot never spawns in the sea", deepest >= LootManager.DRY_LIMIT_Z - 0.01)
 
+	# --- The sea is stingy with a littered beach ---------------------------
+	# Every piece already lying ashore slows the next delivery down, and there is
+	# a hard ceiling so the beach can never silt up completely. Collecting the
+	# junk empties the beach and the sea speeds straight back up.
+	var littered := loot._sea_trash_count()
+	loot._sea_spawn_timer = 0.0
+	loot._process(0.0)
+	var expected := LootManager.SEA_SPAWN_INTERVAL * (1.0 + float(littered) * LootManager.SEA_LITTER_PENALTY)
+	print("SEA littered=%d next delivery in %.1f s (clean beach %.1f s)" % [
+		littered, loot._sea_spawn_timer, LootManager.SEA_SPAWN_INTERVAL])
+	_check("a littered beach slows the sea down",
+		is_equal_approx(loot._sea_spawn_timer, expected)
+		and loot._sea_spawn_timer > LootManager.SEA_SPAWN_INTERVAL)
+	_check("the shore junk ceiling is tight enough to stay tidy",
+		LootManager.SEA_MAX_TOTAL <= 20)
+
+	# Fill the beach: every delivery is beached straight away, so the only thing
+	# that can stop the sea is the ceiling itself.
+	for i in LootManager.SEA_MAX_TOTAL + 10:
+		loot._sea_spawn_timer = 0.0
+		loot._process(0.0)
+		loot._drift_floating(1000.0)
+		loot._drift_floating(1000.0)
+	print("SEA beach junk after %d delivery attempts: %d" % [
+		LootManager.SEA_MAX_TOTAL + 10, loot._sea_trash_count()])
+	_check("the sea stops delivering at the ceiling",
+		loot._sea_trash_count() == LootManager.SEA_MAX_TOTAL)
+
 	_finish()
 
 

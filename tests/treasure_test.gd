@@ -125,7 +125,7 @@ func _check_dig_and_open() -> void:
 	# Dig it out properly, with the shovel the map requires (Trench Spade): the
 	# sand caves in, so reaching 4.6 m takes a long excavation, not three digs.
 	var digs := 0
-	while digs < 260 and not chest.revealed:
+	while digs < 400 and not chest.revealed:
 		terrain.dig_at(spot, 0.9, 0.3)
 		digs += 1
 	print("TREASURE chest uncovered after %d digs" % digs)

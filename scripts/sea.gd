@@ -112,8 +112,10 @@ func _build() -> void:
 	water.position = Vector3(0.0, 0.0, -WATER_SPAN_Z * 0.5)
 	_water = water
 
-	# Dark seabed under the open water, past the edge of the 64 m heightmap. It
-	# keeps the transparent water from fading into the sky at the horizon.
+	# Seabed under the open water, past the edge of the 64 m heightmap. It keeps
+	# the transparent water from fading into the sky at the horizon. Kept a
+	# light wet-sand tone: a dark floor plus the water tint used to read as a
+	# murky maroon band out where the beach ends.
 	var seabed := MeshInstance3D.new()
 	seabed.name = "Seabed"
 	var floor_mesh := PlaneMesh.new()
@@ -122,7 +124,7 @@ func _build() -> void:
 	seabed.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	seabed.position = Vector3(0.0, SandTerrain.SEA_FLOOR - 0.4, -WATER_SPAN_Z * 0.5)
 	var floor_material := StandardMaterial3D.new()
-	floor_material.albedo_color = Color(0.16, 0.15, 0.13)
+	floor_material.albedo_color = Color(0.34, 0.36, 0.30)
 	floor_material.roughness = 1.0
 	floor_material.metallic = 0.0
 	seabed.material_override = floor_material

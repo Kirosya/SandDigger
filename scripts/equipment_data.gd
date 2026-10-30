@@ -32,10 +32,11 @@ static func create(p_index: int, p_name: String, p_level: int, p_money: float, p
 
 ## The fixed progression chain. Ordered from weakest to strongest.
 ##
-## The chain is deliberately long: the beach is six metres deep now, so a hole
+## The chain is deliberately long: the beach is eight metres deep now, so a hole
 ## that reaches the bottom is an excavation. Each step buys a wider bowl, a
 ## deeper bite and a longer reach, which together are what allows the next
-## half metre of depth to hold.
+## half metre of depth to hold. Sand also packs harder with depth, so a shovel
+## only works at full strength on the surface.
 static func default_tiers() -> Array[EquipmentData]:
 	var tiers: Array[EquipmentData] = []
 	tiers.append(create(0, "Teaspoon", 1, 0.0, 0.15, 0.05, 3.6))

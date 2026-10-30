@@ -134,10 +134,19 @@ the real `main._save_world()` / `main._load_world()` path rather than re-impleme
 
 ## Deep sand
 
-The beach is `SandTerrain.MAX_DEPTH = 6.0` metres deep, and the sand behaves like
+The beach is `SandTerrain.MAX_DEPTH = 8.0` metres deep, and the sand behaves like
 sand: a wall steeper than the angle of repose slides into the hole it was dug
 from. `dig_at` carves the bowl, then runs `_settle_sand()` over the touched area
 a few times before the mesh is rebuilt.
+
+Deep sand also **packs harder**. `dig_power_at()` reads the height at the dig
+point and returns `clampf(1 + h / HARDEN_DEPTH, HARDEN_MIN, 1)`, which `dig_at`
+applies before carving: `radius *= power` and the bite is softened by half that
+much again (`depth *= lerpf(1, power, 0.5)`). A shovel is at full strength on the
+surface, about half strength at 4 m, and never below `HARDEN_MIN`. Because it is
+computed from the heightmap, the host and every client scale the same scoop the
+same way - `sand_test` replays a host dig on a second terrain and still gets a
+byte-identical beach.
 
 | constant | value | meaning |
 | --- | --- | --- |
@@ -146,6 +155,8 @@ a few times before the mesh is rebuilt.
 | `SLUMP_RELAX` | 0.50 | how much of the offending step moves per pass |
 | `SEA_DIG_MARGIN` | 1.4 m | a dig in the surf cannot go this far below the sea bed |
 | `MAX_DIG_DISTANCE` | 9.0 m | the host accepts a dig this far from the sender |
+| `HARDEN_DEPTH` | 8.0 m | depth over which a shovel fades to its weakest bite |
+| `HARDEN_MIN` | 0.40 | the weakest a shovel ever gets (40 % of its surface power) |
 
 Three properties make this safe rather than chaotic:
 
@@ -161,9 +172,10 @@ Three properties make this safe rather than chaotic:
 
 The practical effect is the point of the whole rework: a 15 cm teaspoon hole in
 one spot stops at about -1 m no matter how long you dig, because the rim keeps
-sliding in. Going deeper means widening the excavation - a Trench Spade needs
-about 80 scoops to stand a 4.5 m pit. That is the slow, deliberate digging loop
-the game was missing.
+sliding in. Going deeper means widening the excavation - and paying for it, since
+the scoop itself shrinks with depth. A Trench Spade needs about 190 scoops to
+stand a 4.6 m pit; the Dune Excavator reaches the 8 m floor in roughly 260. That
+is the slow, deliberate digging loop the game was missing.
 
 Shovels also gained a `reach`: 3.6 m at the teaspoon up to 7.4 m at the Dune
 Excavator, because a deep pit is worked from its rim. `floor_max_angle` on the
@@ -218,8 +230,34 @@ and they pay more than every junk item in the bag. They get their own banner and
 the `upgrade` chime on reveal.
 
 An item that the collapsing walls bury again goes back to "not revealed" and its
-`[E]` label is removed (`LootManager.REBURY_MARGIN`), so a hole that fills in
-really does swallow what you had just uncovered.
+label is removed (`LootManager.REBURY_MARGIN`), so a hole that fills in really
+does swallow what you had just uncovered.
+
+Reach is measured to where the item **is**, not to the spot on the beach it was
+buried at: `LootItem.world_position()` returns the item node's real position, so
+standing at the bottom of a 4.6 m pit next to the chest is a 1 m reach, not a
+4.6 m one. This is what used to leave deep junk and every chest with an `[E]` on
+their label that pressing E did nothing about. The floating label itself no
+longer says `[E]`; it just names the find and its value, and the HUD owns the
+`[E] Take ...` prompt because only the HUD knows the real distance.
+
+## Tide junk
+
+The sea washes junk ashore while the tide comes in. It is deliberately
+self-limiting: the more pieces are already lying on the beach, the longer the sea
+waits before delivering the next one, and there is a hard ceiling so the shore can
+never silt up completely.
+
+| constant | value | meaning |
+| --- | --- | --- |
+| `SEA_SPAWN_INTERVAL` | 4 s | wait between deliveries on a clean beach |
+| `SEA_LITTER_PENALTY` | 0.8 | each piece already ashore multiplies that wait |
+| `SEA_MAX_TOTAL` | 18 | most tide junk allowed to lie on the beach at once |
+| `SEA_MAX_FLOATING` | 4 | most pieces bobbing in the surf at once |
+
+Clearing the beach is therefore rewarded twice: the junk is worth money, and the
+sea immediately goes back to washing in a piece every few seconds. Left alone,
+18 pieces is as dirty as the shore gets.
 
 ## The endgame: treasure maps
 
@@ -234,7 +272,7 @@ it is the detector's real job plus a genuinely wide, deep excavation.
 | `PlayerState.TREASURE_MAP_PRICE` | $500 | the map, paid up front |
 | `PlayerState.TREASURE_FIRST_PAYOUT` | $2500 | the first chest a profile ever opens |
 | `PlayerState.TREASURE_PAYOUT_MIN/MAX` | $1500-$2200 | every chest after that |
-| `LootManager.TREASURE_DEPTH` | 4.6 m | the chest's depth (`MAX_DEPTH` is 6.0) |
+| `LootManager.TREASURE_DEPTH` | 4.6 m | the chest's depth (`MAX_DEPTH` is 8.0) |
 
 Buying a map has `LootManager.spawn_treasure()` bury a **Sunken Chest** in dry sand,
 clear of the spawn and the stalls, at a random spot with a fixed payout for that
@@ -259,11 +297,12 @@ is already uncovered. Once opened it is a claimed id, so it never comes back.
 ## Tests
 
 ```
-godot --headless --path . res://tests/sand_test.tscn      # collapse, volume, determinism, sea bed, XP
+godot --headless --path . res://tests/sand_test.tscn      # collapse, depth hardness, volume, determinism, XP
 godot --headless --path . res://tests/sfx_test.tscn       # streams, tier->sound, puffs, buttons, surf
 godot --headless --path . res://tests/profile_test.tscn   # round trip, damaged files, derived values, bag
 godot --headless --path . res://tests/beach_test.tscn     # save/restore a real dug beach, damaged files
 godot --headless --path . res://tests/treasure_test.tscn  # map offer, deep chest, payout, saved chest
+godot --path . res://tests/sea_shot.tscn                  # visual: the sea to the horizon (proof_sea.png)
 ```
 
 Sound output cannot be heard headless, so the assertions check which stream was handed
