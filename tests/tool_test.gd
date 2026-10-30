@@ -31,6 +31,16 @@ func _ready() -> void:
 	var scale_t1: float = pivot.scale.x
 	_check("tier 1 sits between tier 0 and 3", scale_t1 > scale_t0 and scale_t1 < scale_t3)
 
+	# The last tier of the seven-step chain must still be holdable.
+	player.apply_equipment(tiers[tiers.size() - 1])
+	await get_tree().create_timer(0.45).timeout
+	var scale_top: float = pivot.scale.x
+	_check("the Dune Excavator is the biggest tool", scale_top > scale_t3)
+	var top_near := pivot.position.z + FirstPersonPlayer.TOOL_HANDLE_NEAR_Z * scale_top
+	_check("the biggest tool still clears the camera",
+		top_near < -0.05 and top_near > -0.4)
+	_check("the tool list covers all seven shovels", FirstPersonPlayer.TOOL_SCALES.size() == 7)
+
 	if _failures == 0:
 		print("TOOL OK")
 		get_tree().quit(0)

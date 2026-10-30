@@ -34,7 +34,7 @@ static func encode(heights: PackedFloat32Array, loot: Dictionary) -> PackedByteA
 		if is_nan(height) or is_inf(height):
 			clean[i] = 0.0
 		else:
-			clean[i] = clampf(height, SandTerrain.SEA_FLOOR, 0.0)
+			clean[i] = clampf(height, -SandTerrain.MAX_DEPTH, 0.0)
 
 	var height_bytes := clean.to_byte_array().compress(FileAccess.COMPRESSION_ZSTD)
 	var loot_bytes := var_to_bytes(loot).compress(FileAccess.COMPRESSION_ZSTD)
@@ -96,5 +96,5 @@ static func decode(bytes: PackedByteArray) -> Dictionary:
 		if is_nan(height) or is_inf(height):
 			heights[i] = 0.0
 		else:
-			heights[i] = clampf(height, SandTerrain.SEA_FLOOR, 0.0)
+			heights[i] = clampf(height, -SandTerrain.MAX_DEPTH, 0.0)
 	return {"heights": heights, "loot": loot_data}

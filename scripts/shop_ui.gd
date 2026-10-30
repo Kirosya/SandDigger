@@ -1,18 +1,19 @@
 class_name ShopUI
 extends CanvasLayer
 ## The market panel: buy the metal detector, the next shovel upgrade, and the
-## treasure maps that keep the game going once the Earth Shovel is owned.
+## treasure maps that keep the game going once the Trench Spade is owned.
 ##
 ## Pauses the tree while it is open (like the pause menu) so the player cannot
-## walk around behind the panel. Keys 1-5 buy, E or Esc closes. Prices and
+## walk around behind the panel. Keys 1-8 buy, E or Esc closes. Prices and
 ## requirements are read from PlayerState, so this works unchanged per player.
 
 const GOLD := Color(1.0, 0.86, 0.42)
 const GREEN := Color(0.5, 0.95, 0.55)
 const DIM := Color(0.55, 0.55, 0.58)
-const PANEL_SIZE := Vector2(720, 600)
-## Index of the treasure-map row: after the detector (0) and the three shovels.
-const TREASURE_ROW := 4
+const PANEL_SIZE := Vector2(780, 660)
+## Row layout: 0 the detector, 1..6 the shovel chain, then the treasure map.
+const TREASURE_ROW := 7
+const ROW_COUNT := 8
 
 var _state: PlayerState
 var _player: Node3D
@@ -68,7 +69,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if event is InputEventKey and event.pressed and not event.echo:
 		var key := (event as InputEventKey).keycode
-		if key >= KEY_1 and key <= KEY_5:
+		if key >= KEY_1 and key <= KEY_8:
 			_buy(key - KEY_1)
 			get_viewport().set_input_as_handled()
 
@@ -90,23 +91,39 @@ func _on_row_pressed(index: int) -> void:
 	_buy(index)
 
 
+## Row 0 buys the detector, then each of its three upgrades. They only shorten
+## the recharge and widen the range, so the shop text has to say which one the
+## player is actually paying for.
 func _buy_detector() -> void:
-	if _state.has_detector:
+	var next := _state.next_detector_tier()
+	if next < 0:
 		Sfx.play_ui("denied", 0.04, -8.0)
-		_message.text = "You already own the metal detector."
+		_message.text = "Your %s is already the best detector there is." % _state.detector_name()
 		return
-	if _state.buy_detector():
-		Sfx.play_ui("upgrade", 0.0, -3.0)
-		_message.text = "Bought the Metal Detector!  [Q] swaps it into your hand."
-		if _player != null and _player.has_method("set_tool_mode"):
-			_player.set_tool_mode(1)
-	else:
+	var info := PlayerState.detector_info(next)
+	var was_owned := _state.has_detector
+	if _state.current_level < int(info["level"]):
 		Sfx.play_ui("denied", 0.04, -8.0)
-		_message.text = "The detector costs $%d - keep digging!" % int(PlayerState.DETECTOR_PRICE)
+		_message.text = "The %s needs level %d." % [str(info["name"]), int(info["level"])]
+		return
+	if _state.current_money < float(info["price"]):
+		Sfx.play_ui("denied", 0.04, -8.0)
+		_message.text = "The %s costs $%d - keep digging!" % [
+			str(info["name"]), int(info["price"])]
+		return
+	if not _state.buy_detector():
+		Sfx.play_ui("denied", 0.04, -8.0)
+		_message.text = "That upgrade is not available yet."
+		return
+	Sfx.play_ui("upgrade", 0.0, -3.0)
+	_message.text = "Bought the %s!  recharge %.0f s, range %.0f m" % [
+		_state.detector_name(), _state.detector_cooldown(), _state.detector_range()]
+	if not was_owned and _player != null and _player.has_method("set_tool_mode"):
+		_player.set_tool_mode(1)
 
 
 ## Buys a treasure map and has the world bury the chest it leads to. This is the
-## only way to keep spending money after the Earth Shovel, and the chest pays back
+## only way to keep spending money after the Trench Spade, and the chest pays back
 ## more than the map costs, so digging stays worth it.
 func _buy_treasure_map() -> void:
 	var loot := _loot()
@@ -164,6 +181,36 @@ func _buy_tier(index: int) -> void:
 	_message.text = "The %s needs %s." % [tier.display_name, " and ".join(missing)]
 
 
+## Row 0 of the panel: the detector, then the three upgrades of it. The player
+## always sees exactly one thing to buy - the next one - with the recharge and
+## range it brings, because those are the only two numbers that change.
+func _refresh_detector_row() -> void:
+	var next := _state.next_detector_tier()
+	var owned_name := _state.detector_name()
+	if next < 0:
+		_set_row(0, "[1]  %s" % owned_name,
+			"MAXED  -  %.0f s, %.0f m" % [
+				_state.detector_cooldown(), _state.detector_range()],
+			GOLD, DIM)
+		return
+	var info := PlayerState.detector_info(next)
+	var next_name := str(info["name"])
+	var label := "[1]  %s" % next_name
+	if _state.has_detector:
+		label = "[1]  %s  >  %s" % [owned_name, next_name]
+	var unlocked := _state.current_level >= int(info["level"])
+	var affordable := _state.current_money >= float(info["price"])
+	var status := "BUY  $%d  -  %.0f s, %.0f m" % [
+		int(info["price"]), float(info["cooldown"]), float(info["range"])]
+	if not unlocked:
+		status = "$%d  -  Lv %d" % [int(info["price"]), int(info["level"])]
+	elif not affordable:
+		status = "$%d  -  %.0f s, %.0f m" % [
+			int(info["price"]), float(info["cooldown"]), float(info["range"])]
+	_set_row(0, label, status,
+		GREEN if unlocked and affordable else GOLD, Color.WHITE)
+
+
 func _refresh() -> void:
 	if _state == null:
 		return
@@ -173,17 +220,11 @@ func _refresh() -> void:
 		header += "          Chests  %d" % _state.treasure_finds
 	_money.text = header
 
-	# Row 0: the detector.
-	var owns_detector := _state.has_detector
-	if owns_detector:
-		_set_row(0, "[1]  Metal Detector", "OWNED", GREEN, DIM)
-	else:
-		var can_buy := _state.current_money >= PlayerState.DETECTOR_PRICE
-		_set_row(0, "[1]  Metal Detector",
-			("BUY  $%d" if can_buy else "$%d") % int(PlayerState.DETECTOR_PRICE),
-			GREEN if can_buy else GOLD, Color.WHITE)
+	# Row 0: the detector and its upgrades. One row, always selling the next
+	# tier, so the panel does not grow by three rows nobody can afford yet.
+	_refresh_detector_row()
 
-	# Rows 1..3: the shovel chain.
+	# Rows 1..6: the shovel chain.
 	for i in range(1, TREASURE_ROW):
 		if i >= _state.tiers.size():
 			_row_names[i].text = ""
@@ -266,7 +307,7 @@ func _build() -> void:
 	center.add_child(panel)
 
 	var box := VBoxContainer.new()
-	box.add_theme_constant_override("separation", 12)
+	box.add_theme_constant_override("separation", 8)
 	panel.add_child(box)
 
 	var title := _make_label(34, GOLD)
@@ -282,11 +323,11 @@ func _build() -> void:
 	var rule := HSeparator.new()
 	box.add_child(rule)
 
-	for i in 5:
+	for i in ROW_COUNT:
 		# The whole row is a Button, so a mouse click or a touch tap buys it.
 		# The labels inside ignore the mouse so the click always reaches the row.
 		var button := Button.new()
-		button.custom_minimum_size = Vector2(0, 52)
+		button.custom_minimum_size = Vector2(0, 46)
 		button.focus_mode = Control.FOCUS_NONE
 		button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 		button.add_theme_stylebox_override("normal",
@@ -313,7 +354,7 @@ func _build() -> void:
 		var status_label := _make_label(19, GOLD)
 		status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 		status_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-		status_label.custom_minimum_size = Vector2(240, 0)
+		status_label.custom_minimum_size = Vector2(340, 0)
 		row.add_child(name_label)
 		row.add_child(status_label)
 		margin.add_child(row)
@@ -330,7 +371,7 @@ func _build() -> void:
 	box.add_child(_message)
 
 	var footer := _make_label(15, Color(1, 1, 1, 0.55))
-	footer.text = "Click a row to buy   ·   1-5: buy   ·   E / Esc: leave"
+	footer.text = "Click a row to buy   ·   1-8: buy   ·   E / Esc: leave"
 	footer.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	box.add_child(footer)
 

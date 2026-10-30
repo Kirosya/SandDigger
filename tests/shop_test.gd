@@ -101,6 +101,37 @@ func _ready() -> void:
 		state.carried_count() == 1
 		and is_equal_approx(state.current_money, money_before_empty))
 
+	# --- Detector upgrades -------------------------------------------------
+	# The panel sells one detector tier at a time: 4 tiers, 4 rows worth of
+	# upgrades behind the same key. Level and money both gate each step.
+	state.add_dig_volume(2.0)
+	_check("level 4 reached for the scanner", state.current_level == 4)
+	state.add_money(float(PlayerState.detector_info(2)["price"]))
+	shop.open(state, player)
+	_check("the panel now has eight rows", shop._rows.size() == ShopUI.ROW_COUNT)
+	_check("detector starts at tier 1", state.detector_tier == 1)
+	var upgrade_money := state.current_money
+	shop._buy(0)
+	_check("the Ground Scanner is bought from row 1", state.detector_tier == 2)
+	_check("the upgrade cost its price",
+		is_equal_approx(upgrade_money - state.current_money,
+			float(PlayerState.detector_info(2)["price"])))
+	_check("the recharge got shorter", state.detector_cooldown() < 15.0)
+	_check("the sweep reaches further", state.detector_range() > 8.0)
+	var before_refusal := state.current_money
+	shop._buy(0)
+	_check("Pulse Inductor is blocked below level 10", state.detector_tier == 2
+		and is_equal_approx(state.current_money, before_refusal))
+
+	# Max the chain and the row must say so instead of selling a phantom tier.
+	state.detector_tier = PlayerState.DETECTOR_TIERS.size() - 1
+	shop._refresh()
+	_check("a maxed detector has no next tier", state.next_detector_tier() < 0)
+	_check("the maxed row says MAXED", "MAXED" in shop._row_status[0].text)
+	_check("the panel has one row per detector step plus the shovels and map",
+		ShopUI.ROW_COUNT == 8 and ShopUI.TREASURE_ROW == 7)
+	shop.close()
+
 	_finish()
 
 

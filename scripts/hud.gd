@@ -24,6 +24,9 @@ var _beep: AudioStreamPlayer
 var _chime: AudioStreamPlayer
 var _pings_left := 0
 var _ping_timer := 0.0
+## Range the last sweep was fired with (from the detector tier). <= 0 means
+## "use the default", which is what a test or an unowned detector gets.
+var _ping_range := -1.0
 var _detector_status: Label
 var _treasure: Label
 var _status_text := ""
@@ -268,8 +271,10 @@ func _refresh_inventory() -> void:
 	_set_tool_panel(0, "SHOVEL", _player.get_current_equipment().display_name,
 		true, selected == PlayerState.SLOT_SHOVEL, Color.WHITE)
 	if _player.has_detector:
-		_set_tool_panel(1, "DETECTOR", "ready", true,
-			selected == PlayerState.SLOT_DETECTOR, Color(0.55, 0.95, 1.0))
+		var tier_suffix := "" if _player.detector_tier <= 1 else " %d" % _player.detector_tier
+		_set_tool_panel(1, "DETECTOR", "%s%s" % [
+			_player.detector_name(), tier_suffix],
+			true, selected == PlayerState.SLOT_DETECTOR, Color(0.55, 0.95, 1.0))
 	else:
 		_set_tool_panel(1, "DETECTOR", "$%d market" % int(PlayerState.DETECTOR_PRICE),
 			false, false, Color(0.62, 0.62, 0.66))
@@ -425,25 +430,18 @@ func _process(delta: float) -> void:
 	_update_treasure_line()
 
 
-## The treasure line lives above the detector readout while a chest is buried.
-## It counts down the distance to the light shaft, so a big beach still reads as
-## "you are getting warmer" instead of an empty search.
+## The treasure line only says that a chest is still out there. It deliberately
+## gives no distance, no direction and no marker: the map hides the chest, and
+## finding it is what the detector is for.
 func _update_treasure_line() -> void:
 	if _treasure == null:
 		return
 	if _loot == null:
 		_loot = get_tree().get_first_node_in_group("loot_manager") as LootManager
-	if _loot == null or _player_node == null:
+	if _loot == null or not _loot.has_treasure():
 		_treasure.text = ""
 		return
-	var distance := _loot.treasure_distance(_player_node.global_position)
-	if is_inf(distance):
-		_treasure.text = ""
-		return
-	if distance <= LootManager.TREASURE_BEACON_RADIUS:
-		_treasure.text = "TREASURE  -  dig here, it is deep"
-	else:
-		_treasure.text = "TREASURE  %d m" % roundi(distance)
+	_treasure.text = "TREASURE  -  a chest is buried somewhere on this beach"
 
 
 func refresh() -> void:
@@ -493,6 +491,15 @@ func announce_ring(display_name: String, value: int) -> void:
 	flash("Press E to take it before someone else does")
 
 
+## The rarest thing in the sand: an antique from the bottom of the beach. It
+## announces louder than a ring because it is the reason to dig that deep.
+func announce_antique(display_name: String, value: int) -> void:
+	_announce("ANTIQUE!  %s    $%d" % [display_name.to_upper(), value])
+	if _chime != null:
+		_chime.play()
+	flash("Buried treasure - press E before someone else grabs it")
+
+
 ## The endgame moment: a chest is opened. Deliberately louder and longer than a
 ## ring, with the payout and how many chests this beachcomber has found so far.
 func announce_treasure(value: int, finds: int) -> void:
@@ -520,7 +527,9 @@ func _announce(text: String) -> void:
 
 ## One detector use = a short three-beep sweep. It never shows a distance or a
 ## direction: the beeps just get higher and louder the closer the nearest junk.
-func ping_detector() -> void:
+## `range` comes from the detector tier, so a better detector hears further.
+func ping_detector(range: float = -1.0) -> void:
+	_ping_range = range
 	_pings_left = 3
 	_ping_timer = 0.0
 	_fire_ping()
@@ -540,7 +549,10 @@ func set_detector_status(text: String) -> void:
 func detector_strength() -> float:
 	if _loot == null or _player_node == null:
 		return 0.0
-	return _loot.signal_strength(_player_node.global_position)
+	var range := _ping_range
+	if range <= 0.0:
+		range = _player.detector_range() if _player != null else LootManager.SIGNAL_RANGE
+	return _loot.signal_strength(_player_node.global_position, range)
 
 
 func _fire_ping() -> void:
@@ -577,7 +589,7 @@ func _on_inventory_changed(_slots: Array[Dictionary], _held_slot: int) -> void:
 	_refresh_inventory()
 
 
-func _on_detector_changed(_has_detector: bool) -> void:
+func _on_detector_changed(_detector_tier: int) -> void:
 	refresh()
 
 

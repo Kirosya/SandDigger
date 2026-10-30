@@ -13,7 +13,28 @@ extends StaticBody3D
 
 const GRID_SIZE := 128
 const CELL_SIZE := 0.5
-const MAX_DEPTH := 2.0
+## How far down a spot can be dug. Deep enough that a real shaft is possible and
+## the endgame chest can hide well below the reach of the early shovels.
+const MAX_DEPTH := 6.0
+
+## --- Sand that does not stand in a wall ------------------------------------
+##
+## Dry beach sand has an angle of repose: a vertical wall is impossible, so a
+## narrow hole caves in and half-buries itself again. That is also the game's
+## rhythm - you cannot sink a 1 m wide tube to the bottom, you have to keep
+## widening the pit - so the numbers matter.
+##
+## `SAND_SLOPE_STEP` is how much one grid cell (0.5 m) may drop relative to its
+## neighbour before sand slides: 0.50 m over 0.5 m is ~45 degrees. `SLUMP_PASSES`
+## lets the collapse travel a couple of cells per scoop, and `SLUMP_RELAX` how
+## much of the offending step is moved per pass (volume is conserved, so what
+## falls in has to come from the wall).
+const SAND_SLOPE_STEP := 0.50
+const SLUMP_PASSES := 3
+const SLUMP_RELAX := 0.50
+## How far below the natural sea bed a wet spot may be dug, so the surf never
+## gets a hole punched through it.
+const SEA_DIG_MARGIN := 1.4
 
 const HALF_GRID := (GRID_SIZE - 1) * 0.5
 const CELL_AREA := CELL_SIZE * CELL_SIZE
@@ -111,7 +132,13 @@ func _generate_beach() -> void:
 ## are 0.5 m apart: sampling a 0.15 m teaspoon bowl exactly at grid points would
 ## miss every vertex and dig nothing. The padding keeps the teaspoon carving a
 ## visible scoop while every tier still widens as its radius grows.
+##
+## After the scoop the walls are given a chance to collapse (`_settle_sand`), so
+## the hole that survives is the one the sand allows: a wide pit holds, a narrow
+## shaft fills itself back in. The whole thing is deterministic because clients
+## replay it through `apply_dig`.
 func dig_at(world_pos: Vector3, radius: float, depth: float) -> float:
+	last_dig_changed = false
 	if radius <= 0.0 or depth <= 0.0:
 		return 0.0
 
@@ -130,7 +157,11 @@ func dig_at(world_pos: Vector3, radius: float, depth: float) -> float:
 		return 0.0
 
 	var dirty := Rect2i(min_x, min_z, max_x - min_x + 1, max_z - min_z + 1)
-	var dug_volume := 0.0
+	# Snapshot the sand first: the collapse runs outward, and the XP has to be
+	# what is actually gone once the walls have fallen in, not what the scoop
+	# removed on paper.
+	var area := _clamp_rect(dirty.grow(3))
+	var before := _copy_region(area)
 
 	for z in range(min_z, max_z + 1):
 		var world_dz := (float(z) - grid_center.y) * CELL_SIZE
@@ -145,28 +176,123 @@ func dig_at(world_pos: Vector3, radius: float, depth: float) -> float:
 				continue
 			var index := row + x
 			var old_height := heights[index]
-			var new_height := clampf(old_height - depth * falloff, -MAX_DEPTH, 0.0)
+			var floor_limit := -MAX_DEPTH
+			# Wet sand under the sea keeps a floor, so a dig in the surf cannot
+			# open a hole in the sea bed.
+			if base_heights[index] < -0.05:
+				floor_limit = maxf(-MAX_DEPTH, base_heights[index] - SEA_DIG_MARGIN)
+			var new_height := clampf(old_height - depth * falloff, floor_limit, 0.0)
 			if new_height < old_height - 0.000001:
 				heights[index] = new_height
-				# Approximate removed volume: one grid vertex owns one cell.
-				dug_volume += (old_height - new_height) * CELL_AREA
 
-	if dug_volume <= 0.0:
+	_settle_sand(area)
+	if not _region_changed(before, area):
 		return 0.0
-
-	rebuild_mesh(dirty)
+	# The scoop and the collapse both moved sand, so the mesh has to be rebuilt
+	# even when the net loss is zero (a fully refilled hole still changed shape),
+	# and the dig has to be broadcast for the same reason: the shape changed even
+	# when nothing was carried away.
+	last_dig_changed = true
+	var dug_volume := _volume_lost(before, area)
+	rebuild_mesh(area)
 	_sync_collision()
 	dug.emit(world_pos, radius, depth)
 	return dug_volume
 
 
+## One pass of "too steep, sand slides" over `area`, repeated a few times so the
+## collapse walks outward from the fresh scoop instead of leaving a cliff.
+##
+## Volume conserving and order dependent but fully deterministic: the host and
+## every client run the exact same loop over the exact same heights.
+func _settle_sand(area: Rect2i) -> void:
+	var rect := _clamp_rect(area)
+	for _pass in SLUMP_PASSES:
+		var slid := false
+		for z in range(rect.position.y, rect.end.y):
+			var row := z * GRID_SIZE
+			for x in range(rect.position.x, rect.end.x):
+				var index := row + x
+				var height := heights[index]
+				var lowest := height
+				var lowest_index := -1
+				if x > 0 and heights[index - 1] < lowest:
+					lowest = heights[index - 1]
+					lowest_index = index - 1
+				if x < GRID_SIZE - 1 and heights[index + 1] < lowest:
+					lowest = heights[index + 1]
+					lowest_index = index + 1
+				if z > 0 and heights[index - GRID_SIZE] < lowest:
+					lowest = heights[index - GRID_SIZE]
+					lowest_index = index - GRID_SIZE
+				if z < GRID_SIZE - 1 and heights[index + GRID_SIZE] < lowest:
+					lowest = heights[index + GRID_SIZE]
+					lowest_index = index + GRID_SIZE
+				if lowest_index < 0:
+					continue
+				var step := height - lowest
+				if step <= SAND_SLOPE_STEP:
+					continue
+				var moved := (step - SAND_SLOPE_STEP) * SLUMP_RELAX
+				heights[index] -= moved
+				heights[lowest_index] += moved
+				slid = true
+		if not slid:
+			return
+
+
+## Copies the rectangle into a flat array laid out row by row, for measuring how
+## much sand the scoop plus the collapse actually removed.
+func _copy_region(rect: Rect2i) -> PackedFloat32Array:
+	var copy := PackedFloat32Array()
+	copy.resize(rect.size.x * rect.size.y)
+	var out := 0
+	for z in range(rect.position.y, rect.end.y):
+		var row := z * GRID_SIZE
+		for x in range(rect.position.x, rect.end.x):
+			copy[out] = heights[row + x]
+			out += 1
+	return copy
+
+
+## Net sand lost inside `rect` since `before` was taken (never negative).
+func _volume_lost(before: PackedFloat32Array, rect: Rect2i) -> float:
+	var lost := 0.0
+	var i := 0
+	for z in range(rect.position.y, rect.end.y):
+		var row := z * GRID_SIZE
+		for x in range(rect.position.x, rect.end.x):
+			lost += before[i] - heights[row + x]
+			i += 1
+	return maxf(lost * CELL_AREA, 0.0)
+
+
+## True when any grid point inside `rect` differs from the snapshot, even by a
+## hair. Used to rebuild the mesh after a collapse that put every grain back.
+func _region_changed(before: PackedFloat32Array, rect: Rect2i) -> bool:
+	var i := 0
+	for z in range(rect.position.y, rect.end.y):
+		var row := z * GRID_SIZE
+		for x in range(rect.position.x, rect.end.x):
+			if absf(before[i] - heights[row + x]) > 0.000001:
+				return true
+			i += 1
+	return false
+
+
 ## --- Multiplayer ---------------------------------------------------------
 
 ## How far a dig request may land from the player who sent it. A little over the
-## local DIG_REACH so a small position desync never rejects a legitimate dig.
-const MAX_DIG_DISTANCE := 6.0
+## best shovel's reach so a small position desync never rejects a legitimate dig.
+const MAX_DIG_DISTANCE := 9.0
 
 var _dig_stamps: Dictionary = {}
+
+## Set by `dig_at` on every call: true when the scoop or the collapse changed the
+## heightmap at all. A dig can move sand around and still net zero (a hole that
+## filled itself back in), and those still have to be broadcast or the host and a
+## client would drift apart.
+var last_dig_changed := false
 
 
 ## Offline or host: this machine owns the sand. Clients only mirror it.
@@ -227,11 +353,11 @@ func host_dig(world_position: Vector3, player_id: int, tier_index: int) -> float
 	var tiers := EquipmentData.default_tiers()
 	var equipment: EquipmentData = tiers[clampi(tier_index, 0, tiers.size() - 1)]
 	var volume := dig_at(world_position, equipment.radius, equipment.depth)
-	if volume <= 0.0:
+	if not last_dig_changed:
 		return 0.0
 	if Net.is_online():
 		rpc("apply_dig", world_position, equipment.radius, equipment.depth)
-	if state != null:
+	if state != null and volume > 0.0:
 		state.add_dig_volume(volume)
 		if Net.is_online() and player_id != multiplayer.get_unique_id():
 			rpc_id(player_id, "grant_xp", volume)

@@ -3,11 +3,11 @@ extends Node
 ##
 ## Runs on the real main scene and covers the whole loop:
 ##   - the map is not on offer before the Earth Shovel,
-##   - buying one costs money, buries the chest and raises the light beacon,
+##   - buying one costs money and buries the chest with NO marker at all,
 ##   - a second map cannot be bought while one is out,
-##   - the chest is deeper than ordinary trash and only opens once dug out,
-##   - opening it pays into money (not the bag), counts as a find and drops the
-##     beacon,
+##   - the chest sits near the bottom of the sand (4.6 m) and only opens once a
+##     wide, deep pit is dug out,
+##   - opening it pays into money (not the bag) and counts as a find,
 ##   - an unopened chest survives a saved-beach round trip, an opened one does not.
 
 const SCRATCH_PROFILE := "user://test_treasure_profile.cfg"
@@ -66,19 +66,19 @@ func _check_offer_and_price() -> void:
 
 	var chest = loot.spawn_treasure(state.next_treasure_payout(_rng()))
 	_check("a chest is buried", chest != null and loot.has_treasure())
-	_check("the chest is much deeper than trash",
+	_check("the chest sits near the bottom of the sand",
 		is_equal_approx(chest.depth, LootManager.TREASURE_DEPTH)
-		and chest.depth > 1.5)
+		and chest.depth > 4.0)
 	_check("the chest is not surface loot", not chest.on_surface)
 	_check("the chest is not claimable while buried", not chest.revealed)
-	_check("the beacon is up", loot.get("_beacon") != null)
+	# "No hint at all": the map may not leave a marker in the world.
+	var markers := 0
+	for child in loot.get_children():
+		if child is MeshInstance3D or child.name.contains("Beacon"):
+			markers += 1
+	_check("the map leaves no marker in the world", markers == 0)
 	_check("the first chest pays the legend amount",
 		is_equal_approx(chest.value, PlayerState.TREASURE_FIRST_PAYOUT))
-
-	# Distance readout for the HUD: a number while a map is out, INF afterwards.
-	var far: Vector3 = chest.buried_position + Vector3(10.0, 0.0, 0.0)
-	_check("distance to the chest is reported",
-		absf(loot.treasure_distance(far) - 10.0) < 0.01)
 
 	# A second map is not sold while the first chest is still out.
 	var money_now := state.current_money
@@ -92,8 +92,9 @@ func _check_offer_and_price() -> void:
 		is_equal_approx(state.current_money, money_now + PlayerState.TREASURE_MAP_PRICE))
 	shop.close()
 
-	# The map row must be the fifth row of the panel.
-	_check("the shop builds five rows", shop._row_names.size() == 5)
+	# The map row must be the last of eight rows: detector, six shovels, map.
+	_check("the shop builds eight rows",
+		shop._row_names.size() == ShopUI.ROW_COUNT and ShopUI.TREASURE_ROW == 7)
 
 	game.queue_free()
 	await get_tree().create_timer(0.3).timeout
@@ -115,17 +116,19 @@ func _check_dig_and_open() -> void:
 	var money_before := state.current_money
 	var bag_before := state.carried_count()
 
-	# Ordinary shallow digging must not open it: the chest sits below the reach of
-	# a couple of scoops.
+	# Ordinary shallow digging must not open it: the chest sits far below the
+	# reach of a couple of scoops.
 	terrain.dig_at(spot, 0.7, 0.35)
 	terrain.dig_at(spot, 0.7, 0.35)
 	_check("a shallow hole does not uncover the chest", not chest.revealed)
 
-	# Dig it out properly.
-	for i in 14:
-		if chest.revealed:
-			break
-		terrain.dig_at(spot, 1.1, 0.6)
+	# Dig it out properly, with the shovel the map requires (Trench Spade): the
+	# sand caves in, so reaching 4.6 m takes a long excavation, not three digs.
+	var digs := 0
+	while digs < 260 and not chest.revealed:
+		terrain.dig_at(spot, 0.9, 0.3)
+		digs += 1
+	print("TREASURE chest uncovered after %d digs" % digs)
 	_check("digging deep enough uncovers the chest", chest.revealed)
 	var depth := terrain.get_height_at(spot)
 	_check("the chest sits at the bottom of a real pit",
@@ -137,7 +140,6 @@ func _check_dig_and_open() -> void:
 	_check("the chest did not go into the bag", state.carried_count() == bag_before)
 	_check("the find was counted", state.treasure_finds == 1)
 	_check("no chest is left in the sand", not loot.has_treasure())
-	_check("the beacon is gone", loot.get("_beacon") == null)
 	_check("the chest is remembered as claimed",
 		chest.loot_id in loot.export_snapshot()["claimed"])
 	_check("no treasure is packed after the find",
@@ -197,17 +199,18 @@ func _check_saved_chest() -> void:
 			restored.buried_position.distance_to(chest_pos) < 0.001)
 		_check("the restored chest keeps its payout",
 			is_equal_approx(restored.value, 1234.0))
-		_check("the light is back over the chest", loot2.get("_beacon") != null)
+		_check("the restored chest stays hidden",
+			not restored.revealed and restored.depth > 4.0)
 	_check("the restored world is still diggable",
 		terrain2.heights.size() == SandTerrain.GRID_SIZE * SandTerrain.GRID_SIZE)
 
 	# And a claimed chest must not come back.
 	if restored != null:
 		var spot2 := Vector3(restored.buried_position.x, 0.0, restored.buried_position.z)
-		for i in 14:
-			if restored.revealed:
-				break
-			terrain2.dig_at(spot2, 1.1, 0.6)
+		var digs2 := 0
+		while digs2 < 260 and not restored.revealed:
+			terrain2.dig_at(spot2, 0.9, 0.3)
+			digs2 += 1
 		loot2.take_loot(restored.loot_id, local_id)
 		var after := loot2.export_snapshot()
 		_check("an opened chest is not packed as treasure again",

@@ -15,11 +15,12 @@ extends Node
 ## Phase 3 turns `_try_dig()` into a `request_dig` RPC and moves the heightmap
 ## mutation to the host; nothing else in this script changes.
 
+## Fallback reach for a body with no equipment yet. The real reach comes from the
+## shovel tier: a better shovel works further down a pit, which is what makes
+## deep sand reachable at all.
 const DIG_REACH := 3.6
 const DIG_INTERVAL := 0.4
 const INTERACT_RANGE := 2.8
-## The detector is a one-shot sweep on a long recharge so it stays a decision.
-const DETECTOR_COOLDOWN := 15.0
 
 var _player_body: FirstPersonPlayer
 var _camera: Camera3D
@@ -166,7 +167,9 @@ func _try_dig() -> void:
 
 	var origin := _camera.global_position
 	var direction := -_camera.global_transform.basis.z
-	var query := PhysicsRayQueryParameters3D.create(origin, origin + direction * DIG_REACH)
+	var equipment := _state.get_current_equipment()
+	var query := PhysicsRayQueryParameters3D.create(
+		origin, origin + direction * equipment.reach)
 	query.collide_with_areas = false
 	var hit := _terrain.get_world_3d().direct_space_state.intersect_ray(query)
 	if hit.is_empty():
@@ -174,7 +177,6 @@ func _try_dig() -> void:
 	if hit.get("collider") != _terrain:
 		return
 
-	var equipment := _state.get_current_equipment()
 	var world_position: Vector3 = hit["position"]
 	# The host carves and broadcasts; a client only asks and lets the broadcast
 	# carve its own copy, so every beach ends up identical.
@@ -326,8 +328,8 @@ func _use_detector() -> void:
 	if _detector_cooldown > 0.0:
 		_flash_hud("Detector recharging - %.0f s" % ceilf(_detector_cooldown))
 		return
-	_detector_cooldown = DETECTOR_COOLDOWN
-	_hud.ping_detector()
+	_detector_cooldown = _state.detector_cooldown()
+	_hud.ping_detector(_state.detector_range())
 	_flash_hud("Detector ping - listen for the beeps")
 
 
@@ -346,9 +348,11 @@ func _update_tool_status() -> void:
 		return
 	if _state.selected_slot == PlayerState.SLOT_DETECTOR:
 		if _detector_cooldown > 0.0:
-			_hud.set_detector_status("Detector: %.0f s" % ceilf(_detector_cooldown))
+			_hud.set_detector_status("%s: %.0f s" % [
+				_state.detector_name(), ceilf(_detector_cooldown)])
 		else:
-			_hud.set_detector_status("Detector: ready  -  left click   [Q] shovel")
+			_hud.set_detector_status("%s: ready  -  left click   [Q] shovel" % [
+				_state.detector_name()])
 		return
 	_hud.set_detector_status("Shovel: %s   [Q] %s" % [
 		_state.get_current_equipment().display_name,

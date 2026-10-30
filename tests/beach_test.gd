@@ -51,7 +51,8 @@ func _check_store() -> void:
 	_check("height count survives", restored.size() == heights.size())
 	_check("positive garbage heights are clamped", restored[0] == 0.0)
 	_check("too-deep walls are clamped to the floor",
-		is_equal_approx(restored[1], SandTerrain.SEA_FLOOR))
+		is_equal_approx(restored[1], -SandTerrain.MAX_DEPTH))
+	_check("the clamp allows a deep pit", SandTerrain.MAX_DEPTH >= 5.0)
 	_check("NaN heights fall back to flat sand", restored[2] == 0.0)
 	_check("a real dig depth is kept", absf(restored[3] + 0.75) < 0.0001)
 	_check("loot snapshot survives",
@@ -83,7 +84,7 @@ func _check_round_trip() -> void:
 	var left_item = null
 	var taken_item = null
 	for item in loot.loot:
-		if item.on_surface or item.floating:
+		if item.on_surface or item.floating or item.depth > 1.5:
 			continue
 		if left_item == null:
 			left_item = item
@@ -159,7 +160,7 @@ func _spawn_beach() -> Node:
 ## Digs straight down on an item until its sand is gone.
 func _uncover(terrain: SandTerrain, item) -> void:
 	var at := Vector3(item.buried_position.x, 0.0, item.buried_position.z)
-	for i in 4:
+	for i in 24:
 		if item.revealed:
 			return
 		terrain.dig_at(at, 1.0, 0.6)

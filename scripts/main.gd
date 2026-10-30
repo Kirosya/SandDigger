@@ -166,7 +166,7 @@ func _on_equipment_save(_equipment: EquipmentData) -> void:
 	_save_profile(0.0)
 
 
-func _on_detector_save(_has_detector: bool) -> void:
+func _on_detector_save(_detector_tier: int) -> void:
 	_save_profile(0.0)
 
 
@@ -343,10 +343,13 @@ func _on_treasure_opened(item: Dictionary, hud: Hud) -> void:
 
 func _on_loot_revealed_sfx(item: Dictionary) -> void:
 	var at: Vector3 = item.get("position", Vector3.ZERO)
-	if item.get("kind", "") == "ring":
-		Sfx.play_world("loot_reveal", at, 0.0, 2.0)
-	else:
-		Sfx.play_world("loot_reveal", at, 0.08, -2.0)
+	match str(item.get("kind", "trash")):
+		"antique":
+			Sfx.play_world("upgrade", at, 0.0, 2.0)
+		"ring":
+			Sfx.play_world("loot_reveal", at, 0.0, 2.0)
+		_:
+			Sfx.play_world("loot_reveal", at, 0.08, -2.0)
 
 
 ## A dig only produces feedback where the sand actually changed: this listens to
@@ -362,8 +365,11 @@ func _on_dug(world_position: Vector3, radius: float, _depth: float) -> void:
 
 
 func _on_loot_revealed(item: Dictionary, hud: Hud) -> void:
-	if item.get("kind", "") == "ring":
-		hud.announce_ring(str(item.get("name", "Gold Ring")), int(item.get("value", 0)))
-		return
-	hud.flash("Uncovered: %s  -  walk up and press E" % item.get("name", "loot"))
+	match str(item.get("kind", "trash")):
+		"antique":
+			hud.announce_antique(str(item.get("name", "Antique")), int(item.get("value", 0)))
+		"ring":
+			hud.announce_ring(str(item.get("name", "Gold Ring")), int(item.get("value", 0)))
+		_:
+			hud.flash("Uncovered: %s  -  walk up and press E" % item.get("name", "loot"))
 

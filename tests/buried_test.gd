@@ -24,13 +24,29 @@ func _ready() -> void:
 
 	var item: LootManager.LootItem = null
 	for candidate in loot.loot:
-		if not candidate.on_surface:
+		if candidate.on_surface:
+			continue
+		if item == null or candidate.depth < item.depth:
 			item = candidate
-			break
 	_check("buried item exists", item != null)
 	if item == null:
 		_finish()
 		return
+
+	# The scatter is deep now, and sand collapses: check the shallowest buried
+	# item so the test stays about reveal behaviour, not about digging power.
+	var antique: LootManager.LootItem = null
+	var antique_count := 0
+	for candidate in loot.loot:
+		if candidate.kind == "antique":
+			antique_count += 1
+			antique = candidate
+	_check("the beach has antiques", antique != null and antique_count >= 3)
+	if antique != null:
+		_check("an antique is a deep find", antique.kind == "antique"
+			and antique.depth >= LootManager.ANTIQUE_DEPTH_MIN - 0.001
+			and antique.depth <= LootManager.ANTIQUE_DEPTH_MAX + 0.001)
+		_check("an antique is worth a fortune", antique.value >= 400.0)
 
 	print("BURIED target=%s depth=%.2f at %s" % [
 		item.display_name, item.depth, str(item.buried_position)])
@@ -42,15 +58,15 @@ func _ready() -> void:
 	var previous_y := item.node.position.y
 	var reveal_surface := 0.0
 	var steps := 0
-	while steps < 40:
+	while steps < 60:
 		steps += 1
-		terrain.dig_at(item.buried_position, 0.4, 0.08)
+		terrain.dig_at(item.buried_position, 0.45, 0.12)
 		var y := item.node.position.y
 		var surface := terrain.get_height_at(item.buried_position)
 
 		# The sand above the item was removed this dig, so the item may only
 		# move by (at most) that much. Anything bigger is a pop.
-		if absf(y - previous_y) > 0.081:
+		if absf(y - previous_y) > 0.125:
 			_step_failures += 1
 			print("FAIL step %d jumped %.4f -> %.4f" % [steps, previous_y, y])
 		# It must never hover above the sand it is lying in.
@@ -83,7 +99,7 @@ func _ready() -> void:
 
 	# Digging further must keep it on the sand, not leave it hanging in the air.
 	var before := item.node.position.y
-	terrain.dig_at(item.buried_position, 0.4, 0.08)
+	terrain.dig_at(item.buried_position, 0.45, 0.12)
 	var after_surface := terrain.get_height_at(item.buried_position)
 	_check("follows the sand down", item.node.position.y < before)
 	_expect("still rests on the sand", item.node.position.y,

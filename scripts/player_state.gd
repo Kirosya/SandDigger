@@ -14,7 +14,7 @@ signal equipment_changed(equipment: EquipmentData)
 signal carried_changed(carried_count: int, carried_value: float)
 ## Emitted whenever the bag or the held slot changes, so the HUD can redraw.
 signal inventory_changed(slots: Array[Dictionary], held_slot: int)
-signal detector_changed(has_detector: bool)
+signal detector_changed(detector_tier: int)
 ## Emitted when digging pushes this player past a level threshold.
 signal leveled_up(new_level: int)
 ## Emitted when this player opens a buried treasure chest.
@@ -35,24 +35,40 @@ const SLOT_DETECTOR := 1
 const FIRST_BAG_SLOT := 2
 const SLOT_COUNT := FIRST_BAG_SLOT + INVENTORY_SLOTS
 
-## What the market charges for the metal detector.
+## What the market charges for the first metal detector.
 const DETECTOR_PRICE := 35.0
+
+## --- Detector upgrades -----------------------------------------------------
+##
+## The detector is a one-shot sweep on a recharge. Upgrading it does not change
+## what a sweep does, it makes waiting for the next one hurt less: a shorter
+## recharge and a longer range, which matters now that loot hides metres down
+## and the chest gives no marker at all.
+##
+## Index 0 is "not owned". Buying the detector is tier 1.
+const DETECTOR_TIERS := [
+	{"name": "No detector", "price": 0.0, "level": 1, "cooldown": 0.0, "range": 0.0},
+	{"name": "Metal Detector", "price": 35.0, "level": 1, "cooldown": 15.0, "range": 8.0},
+	{"name": "Ground Scanner", "price": 200.0, "level": 4, "cooldown": 11.0, "range": 10.0},
+	{"name": "Pulse Inductor", "price": 600.0, "level": 10, "cooldown": 8.0, "range": 11.0},
+	{"name": "Deep Sounder", "price": 1400.0, "level": 16, "cooldown": 6.0, "range": 12.0},
+]
 
 ## --- The treasure hunt (endgame) -----------------------------------------
 ##
-## Once the Earth Shovel is owned the shovel chain has no next tier, and money
-## had nothing left to buy. The market then sells treasure maps: a map puts a
-## buried chest on the beach, marked by a shaft of light, and the chest pays far
-## more than the map costs. It is the one money sink that also gives the best
-## shovel a purpose (the chest sits nearly two metres down), and it can be
-## repeated, so digging never runs out of direction.
-const TREASURE_MAP_PRICE := 400.0
-## Tier index of the Earth Shovel: the map only shows up once you own it.
-const TREASURE_TIER_REQUIRED := 3
+## The map puts a chest far under the sand and says nothing about where: no
+## beacon, no marker, no distance. Finding it is the detector's real job, and
+## the chest pays far more than the map costs. It is the one money sink that
+## also gives the deep shovels a purpose, and it can be repeated, so digging
+## never runs out of direction.
+const TREASURE_MAP_PRICE := 500.0
+## Tier index of the Trench Spade: only a shovel this good can dig a hole deep
+## enough to reach a chest at TREASURE_DEPTH without the walls closing it.
+const TREASURE_TIER_REQUIRED := 4
 ## Payout of the first chest ever opened by this profile; later ones are random.
-const TREASURE_FIRST_PAYOUT := 1500.0
-const TREASURE_PAYOUT_MIN := 1000.0
-const TREASURE_PAYOUT_MAX := 1400.0
+const TREASURE_FIRST_PAYOUT := 2500.0
+const TREASURE_PAYOUT_MIN := 1500.0
+const TREASURE_PAYOUT_MAX := 2200.0
 
 ## Unique id assigned by the host when the player joins. 0 = offline/prototype.
 @export var player_id: int = 0
@@ -65,8 +81,12 @@ var current_level: int = 1
 var current_money: float = 0.0
 ## Index into `tiers`. Every player starts with the Teaspoon.
 var equipment_tier_index: int = 0
-## True once the metal detector has been bought at the market.
-var has_detector: bool = false
+## Detector tier: 0 (none), 1 (bought), up to `DETECTOR_TIERS.size() - 1`.
+var detector_tier: int = 0
+## True once the metal detector has been bought (any tier).
+var has_detector: bool:
+	get:
+		return detector_tier >= 1
 ## How many treasure chests this player has opened. Persisted, because the first
 ## find pays a fixed "legend" amount and the HUD likes to remember it.
 var treasure_finds: int = 0
@@ -348,13 +368,54 @@ func _emit_inventory() -> void:
 
 ## --- Tools / upgrades --------------------------------------------------
 
-## Buys the metal detector from the market.
-func buy_detector() -> bool:
-	if has_detector or current_money < DETECTOR_PRICE:
+## Next detector tier this player could buy, or -1 when already maxed.
+func next_detector_tier() -> int:
+	var next := detector_tier + 1
+	if next >= DETECTOR_TIERS.size():
+		return -1
+	return next
+
+
+## The data block for a detector tier (empty dictionary for an invalid index).
+static func detector_info(tier: int) -> Dictionary:
+	if tier < 0 or tier >= DETECTOR_TIERS.size():
+		return {}
+	return DETECTOR_TIERS[tier]
+
+
+## Seconds between detector sweeps at this player's current detector.
+func detector_cooldown() -> float:
+	return float(detector_info(detector_tier).get("cooldown", 0.0))
+
+
+## How far a sweep can hear at this player's current detector.
+func detector_range() -> float:
+	return float(detector_info(detector_tier).get("range", 0.0))
+
+
+## Display name of the detector in hand ("No detector" when unowned).
+func detector_name() -> String:
+	return str(detector_info(detector_tier).get("name", "No detector"))
+
+
+## True when the next detector tier is affordable and unlocked.
+func can_buy_detector() -> bool:
+	var next := next_detector_tier()
+	if next < 0:
 		return false
-	add_money(-DETECTOR_PRICE)
-	has_detector = true
-	detector_changed.emit(true)
+	var info := detector_info(next)
+	return current_level >= int(info["level"]) and current_money >= float(info["price"])
+
+
+## Buys the next detector tier (the first purchase is the detector itself).
+func buy_detector() -> bool:
+	var next := next_detector_tier()
+	if next < 0 or not can_buy_detector():
+		return false
+	var info := detector_info(next)
+	add_money(-float(info["price"]))
+	detector_tier = next
+	detector_changed.emit(detector_tier)
 	return true
 
 

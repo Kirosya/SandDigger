@@ -13,7 +13,8 @@ func _ready() -> void:
 ## Fires the burst for a cut of `radius` metres, then removes itself.
 func burst(radius: float, at: Vector3) -> void:
 	global_position = at
-	# 0 for the teaspoon, 1 for the earth shovel.
+	# 0 for the teaspoon, 1 for the earth shovel and up, so the four biggest
+	# tiers all throw the maximum spray.
 	var t := clampf((radius - 0.10) / 0.60, 0.0, 1.0)
 	self.amount = clampi(int(lerpf(20.0, 64.0, t)), 18, 72)
 

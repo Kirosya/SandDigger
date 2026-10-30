@@ -63,9 +63,11 @@ func _ready() -> void:
 	var buried := 0
 	var surface := 0
 	var rings := 0
+	var antiques := 0
 	var trash_value := 0.0
 	var trash_count := 0
 	var ring_value := 0.0
+	var antique_value := 0.0
 	var depth_sum := 0.0
 	var depth_min := 99.0
 	var depth_max := 0.0
@@ -77,19 +79,28 @@ func _ready() -> void:
 			depth_sum += item.depth
 			depth_min = minf(depth_min, item.depth)
 			depth_max = maxf(depth_max, item.depth)
-		if item.kind == "ring":
-			rings += 1
-			ring_value += item.value
-		else:
-			trash_count += 1
-			trash_value += item.value
+		match item.kind:
+			"ring":
+				rings += 1
+				ring_value += item.value
+			"antique":
+				antiques += 1
+				antique_value += item.value
+			_:
+				trash_count += 1
+				trash_value += item.value
 
-	var total_value := trash_value + ring_value
-	print("count=%d  buried=%d  surface=%d  rings=%d" % [
-		_loot.loot.size(), buried, surface, rings])
-	print("trash avg=$%.1f (n=%d)  ring avg=$%.1f (n=%d)" % [
+	var total_value := trash_value + ring_value + antique_value
+	print("count=%d  buried=%d  surface=%d  rings=%d  antiques=%d" % [
+		_loot.loot.size(), buried, surface, rings, antiques])
+	print("trash avg=$%.1f (n=%d)  ring avg=$%.1f (n=%d)  antique avg=$%.1f (n=%d)" % [
 		trash_value / maxf(trash_count, 1.0), trash_count,
-		ring_value / maxf(rings, 1.0), rings])
+		ring_value / maxf(rings, 1.0), rings,
+		antique_value / maxf(antiques, 1.0), antiques])
+	print("depth bands  trash %.2f-%.2f  ring %.2f-%.2f  antique %.2f-%.2f" % [
+		LootManager.TRASH_DEPTH_MIN, LootManager.TRASH_DEPTH_MAX,
+		LootManager.RING_DEPTH_MIN, LootManager.RING_DEPTH_MAX,
+		LootManager.ANTIQUE_DEPTH_MIN, LootManager.ANTIQUE_DEPTH_MAX])
 	print("world money total=$%.0f  buried depth avg=%.2f min=%.2f max=%.2f" % [
 		total_value, depth_sum / maxf(buried, 1.0), depth_min, depth_max])
 	var avg_item := total_value / maxf(_loot.loot.size(), 1.0)

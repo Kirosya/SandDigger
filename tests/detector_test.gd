@@ -74,6 +74,29 @@ func _ready() -> void:
 	can.buried_position = Vector3(30.0, 0.0, 0.0)
 	_expect("far metal ignored", loot.metal_noise(sample_point), 0.0, 0.001)
 
+	# --- detector tiers ----------------------------------------------------
+	var state := PlayerState.new()
+	state.tiers = EquipmentData.default_tiers()
+	add_child(state)
+	_check("no detector by default", not state.has_detector and state.detector_range() <= 0.0)
+	state.detector_tier = 1
+	_expect("tier 1 hears 8 m", state.detector_range(), 8.0, 0.001)
+	_expect("tier 1 recharges in 15 s", state.detector_cooldown(), 15.0, 0.001)
+	state.detector_tier = PlayerState.DETECTOR_TIERS.size() - 1
+	_expect("the best detector hears 12 m", state.detector_range(), 12.0, 0.001)
+	_expect("the best detector recharges in 6 s", state.detector_cooldown(), 6.0, 0.001)
+	_check("a maxed detector has no next tier", state.next_detector_tier() < 0)
+
+	# The sweep honours the range it is given, which is what the tier decides.
+	loot.loot.clear()
+	var deep := LootManager.LootItem.new()
+	deep.loot_id = 2000
+	deep.buried_position = Vector3(10.0, 0.0, 0.0)
+	deep.depth = 2.0
+	loot.loot.append(deep)
+	_expect("a 10 m item is silent at 8 m", loot.signal_strength(Vector3.ZERO, 8.0), 0.0, 0.001)
+	_check("a 10 m item is heard at 12 m", loot.signal_strength(Vector3.ZERO, 12.0) > 0.0)
+
 	if _failures == 0:
 		print("DETECTOR OK")
 		get_tree().quit(0)

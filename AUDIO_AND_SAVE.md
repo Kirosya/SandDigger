@@ -69,7 +69,8 @@ One profile per machine, at `user://profile.cfg` (Windows:
 `[local]` section. It stores:
 
 - lifetime XP and money,
-- equipment tier index and whether the detector was bought,
+- equipment tier index and the detector tier (0 = none, 1-4 = the upgrades);
+  older saves that only stored a has_detector flag load as tier 1,
 - the 7 bag slots, item ids/names/kinds/values included,
 - how many treasure chests this beachcomber has opened.
 
@@ -119,8 +120,9 @@ that a reloaded beach would keep its holes but hide every already-dug ring again
 
 Loading is as defensive as the profile. A wrong magic, an unknown version, a truncated or
 random file, a decompression failure or a wrong vertex count all mean "no beach": the game
-keeps the freshly generated one. Heights are clamped to the beach's real range (sea floor
-to flat sand), so even a hand-edited save can only make holes, never spikes.
+keeps the freshly generated one. Heights are clamped to the beach's real range
+(`-SandTerrain.MAX_DEPTH` to flat sand), so even a hand-edited save can only make holes,
+never spikes.
 
 The loot snapshot is deliberately minimal - claimed ids, the tide-spawned items and the
 unopened treasure chest if one is out. The
@@ -130,47 +132,134 @@ state is recomputed from the sand instead of trusted.
 `Profile.world_path_override` points the tests at a scratch file, and `beach_test` drives
 the real `main._save_world()` / `main._load_world()` path rather than re-implementing it.
 
-## The endgame: treasure maps
+## Deep sand
 
-The shovel chain ends at the Earth Shovel, and for a while that was the end of the
-economy: money kept coming in with nothing left to buy. The market's fifth row fixes that
-with a repeatable loop that gives the deepest dig a purpose.
+The beach is `SandTerrain.MAX_DEPTH = 6.0` metres deep, and the sand behaves like
+sand: a wall steeper than the angle of repose slides into the hole it was dug
+from. `dig_at` carves the bowl, then runs `_settle_sand()` over the touched area
+a few times before the mesh is rebuilt.
 
 | constant | value | meaning |
 | --- | --- | --- |
-| `PlayerState.TREASURE_TIER_REQUIRED` | 3 | the map is only sold once the Earth Shovel is owned |
-| `PlayerState.TREASURE_MAP_PRICE` | $400 | the map, paid up front |
-| `PlayerState.TREASURE_FIRST_PAYOUT` | $1500 | the first chest a profile ever opens |
-| `PlayerState.TREASURE_PAYOUT_MIN/MAX` | $1000–$1400 | every chest after that |
-| `LootManager.TREASURE_DEPTH` | 1.85 m | the chest's depth (`SandTerrain.MAX_DEPTH` is 2.0) |
-| `LootManager.TREASURE_BEACON_RADIUS` | 3.6 m | the ring the map draws on the sand |
+| `SAND_SLOPE_STEP` | 0.50 m per 0.5 m cell | a wall steeper than ~45 degrees collapses |
+| `SLUMP_PASSES` | 3 | how far a collapse travels per scoop |
+| `SLUMP_RELAX` | 0.50 | how much of the offending step moves per pass |
+| `SEA_DIG_MARGIN` | 1.4 m | a dig in the surf cannot go this far below the sea bed |
+| `MAX_DIG_DISTANCE` | 9.0 m | the host accepts a dig this far from the sender |
 
-Buying a map has `LootManager.spawn_treasure()` bury a **Sunken Chest** in dry sand, clear
-of the spawn and the stalls, at a random spot with a fixed payout for that hunt. The map
-does not give the exact point: a slim gold beam marks the centre and a ring shows the area,
-so the detector still has a job inside it. Only one map can be out at a time.
+Three properties make this safe rather than chaotic:
 
-The chest is an ordinary `LootItem` with `is_treasure = true`, so it reuses everything the
-trash already has: it is hidden by the sand above it, revealed by `dig_at` cutting past its
-depth, claimed first-wins by the host, and it travels to late joiners and into the save file
-(the snapshot gained a `treasure` key next to `claimed` and `sea`). Two things differ:
+- **Volume is conserved.** Settling only moves sand between grid points, from a
+  higher point to its lowest neighbour, so the beach never gains sand and a hole
+  that fills in really did take the sand from its own walls.
+- **It is deterministic.** Same heights, same scoop, same loop -> byte-identical
+  result. `apply_dig` on a client replays exactly the host's call, so both
+  beaches collapse the same way (`sand_test` asserts a difference of exactly 0).
+- **XP follows net loss.** The XP awarded is the volume actually gone after the
+  walls have fallen in (measured over the grown dirty rect), not the volume the
+  scoop removed on paper.
 
-- a claim pays **straight into money** via `PlayerState.register_treasure_find()` instead
-  of putting an item in the bag — a chest would fill half the bag on its own,
-- the find count (`treasure_finds`) is persisted, so the first-find payout really is once
-  per profile.
+The practical effect is the point of the whole rework: a 15 cm teaspoon hole in
+one spot stops at about -1 m no matter how long you dig, because the rim keeps
+sliding in. Going deeper means widening the excavation - a Trench Spade needs
+about 80 scoops to stand a 4.5 m pit. That is the slow, deliberate digging loop
+the game was missing.
 
-Feedback needs no new RPC either: `LootManager.treasure_opened` already reaches every peer,
-the HUD turns it into a banner with the payout and the running chest count, everyone hears
-the world sound, and the beacon is dropped on every machine by the claim itself.
+Shovels also gained a `reach`: 3.6 m at the teaspoon up to 7.4 m at the Dune
+Excavator, because a deep pit is worked from its rim. `floor_max_angle` on the
+player is 55 degrees so the ~45 degree crater walls stay walkable and nobody gets
+stuck at the bottom of their own hole; the out-of-world respawn limit moved to
+`FALL_LIMIT = -8.5` so standing at the bottom of a legal pit is not a "fell off
+the beach".
 
-An unopened chest survives a restart with its position, payout and light, because it is in
-the `treasure` key of the loot snapshot and the saved heightmap decides whether it is
-already uncovered. Once opened it is a claimed id, so it never comes back.
+## The shovel and detector chains
 
+Seven shovels, four detectors. Each shovel is a wider bowl, a deeper bite and a
+longer reach; each detector is a shorter recharge and a wider sweep.
+
+| tier | shovel | level | price | radius | bite | reach |
+| --- | --- | --- | --- | --- | --- | --- |
+| 0 | Teaspoon | 1 | - | 0.15 | 0.05 | 3.6 |
+| 1 | Sand Shovel | 3 | $50 | 0.30 | 0.10 | 4.2 |
+| 2 | Garden Shovel | 6 | $180 | 0.45 | 0.15 | 4.8 |
+| 3 | Earth Shovel | 10 | $500 | 0.70 | 0.22 | 5.5 |
+| 4 | Trench Spade | 14 | $1100 | 0.90 | 0.30 | 6.2 |
+| 5 | Auger Shovel | 18 | $2400 | 1.15 | 0.42 | 6.8 |
+| 6 | Dune Excavator | 24 | $4500 | 1.45 | 0.58 | 7.4 |
+
+| detector tier | name | level | price | recharge | range |
+| --- | --- | --- | --- | --- | --- |
+| 0 | none | - | - | - | - |
+| 1 | Metal Detector | 1 | $35 | 15 s | 8 m |
+| 2 | Ground Scanner | 4 | $200 | 11 s | 10 m |
+| 3 | Pulse Inductor | 10 | $600 | 8 s | 11 m |
+| 4 | Deep Sounder | 16 | $1400 | 6 s | 12 m |
+
+`PlayerState.has_detector` is now a derived getter (`detector_tier >= 1`), and
+`detector_changed` carries the tier so the HUD and the profile both refresh on an
+upgrade. The market sells exactly one detector row: it always shows the *next*
+tier, so the panel stays eight rows (detector, six shovels, treasure map) no
+matter how long the chains get.
+
+## What is in the sand
+
+Loot depth is what makes the beach a dig instead of a pickup walk. Only ~8 % of
+the scatter lies in plain sight; everything else has a depth band:
+
+| kind | share of buried | depth | value |
+| --- | --- | --- | --- |
+| trash | ~88 % | 0.30-1.20 m | $18-40 |
+| gold ring | 9 % | 1.20-2.60 m | $150-320 |
+| antique | 3 % | 3.50-5.00 m | $400-700 |
+
+The antiques (Antique Amphora, Carved Idol, Bronze Lantern, Ancient Coin Hoard)
+are the reason to sink a real hole: they are metal, so the detector hears them,
+and they pay more than every junk item in the bag. They get their own banner and
+the `upgrade` chime on reveal.
+
+An item that the collapsing walls bury again goes back to "not revealed" and its
+`[E]` label is removed (`LootManager.REBURY_MARGIN`), so a hole that fills in
+really does swallow what you had just uncovered.
+
+## The endgame: treasure maps
+
+The chest is now buried at `LootManager.TREASURE_DEPTH = 4.6 m`, near the bottom
+of the sand, and **the map gives no hint at all**: no beam, no ring, no distance
+readout. The HUD only says that a chest is buried somewhere on the beach. Finding
+it is the detector's real job plus a genuinely wide, deep excavation.
+
+| constant | value | meaning |
+| --- | --- | --- |
+| `PlayerState.TREASURE_TIER_REQUIRED` | 4 | the map is only sold once the Trench Spade is owned |
+| `PlayerState.TREASURE_MAP_PRICE` | $500 | the map, paid up front |
+| `PlayerState.TREASURE_FIRST_PAYOUT` | $2500 | the first chest a profile ever opens |
+| `PlayerState.TREASURE_PAYOUT_MIN/MAX` | $1500-$2200 | every chest after that |
+| `LootManager.TREASURE_DEPTH` | 4.6 m | the chest's depth (`MAX_DEPTH` is 6.0) |
+
+Buying a map has `LootManager.spawn_treasure()` bury a **Sunken Chest** in dry sand,
+clear of the spawn and the stalls, at a random spot with a fixed payout for that
+hunt. Only one map can be out at a time. There is no marker of any kind: the old
+`_spawn_beacon()` / `_beacon` / `TREASURE_BEACON_RADIUS` code is gone, and the
+snapshot/claim paths no longer touch a beacon.
+
+The chest is an ordinary `LootItem` with `is_treasure = true`, so it reuses
+everything the trash already has: it is hidden by the sand above it, revealed by
+`dig_at` cutting past its depth, claimed first-wins by the host, and it travels to
+late joiners and into the save file (the snapshot has a `treasure` key next to
+`claimed` and `sea`). One thing differs: a claim pays **straight into money** via
+`PlayerState.register_treasure_find()` instead of putting an item in the bag, and
+the find count is persisted so the first-find payout really is once per profile.
+
+Feedback needs no new RPC: `LootManager.treasure_opened` already reaches every peer
+and the HUD turns it into a banner with the payout and the running chest count.
+
+An unopened chest survives a restart with its position and payout, because it is in
+the `treasure` key of the loot snapshot and the saved heightmap decides whether it
+is already uncovered. Once opened it is a claimed id, so it never comes back.
 ## Tests
 
 ```
+godot --headless --path . res://tests/sand_test.tscn      # collapse, volume, determinism, sea bed, XP
 godot --headless --path . res://tests/sfx_test.tscn       # streams, tier->sound, puffs, buttons, surf
 godot --headless --path . res://tests/profile_test.tscn   # round trip, damaged files, derived values, bag
 godot --headless --path . res://tests/beach_test.tscn     # save/restore a real dug beach, damaged files

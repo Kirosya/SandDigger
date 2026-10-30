@@ -17,8 +17,8 @@ extends CharacterBody3D
 @export var arrow_look_speed := 2.0
 @export var spawn_point := Vector3(0.0, 0.2, 6.0)
 
-## How much the held tool grows per tier (Teaspoon -> Earth Shovel).
-const TOOL_SCALES := [1.0, 1.3, 1.65, 2.1]
+## How much the held tool grows per tier (Teaspoon -> Dune Excavator).
+const TOOL_SCALES := [1.0, 1.3, 1.65, 2.1, 2.5, 2.9, 3.35]
 ## Resting pose of the tool in the camera; the scene transform matches this.
 const TOOL_BASE_POSITION := Vector3(0.26, -0.25, -0.46)
 ## Local z of the handle end nearest the camera (the "hand" end).
@@ -64,6 +64,9 @@ const NET_STREAM_INTERVAL := 1.0 / 15.0
 var tool_mode: int = TOOL_SHOVEL
 
 var _gravity: float = float(ProjectSettings.get_setting("physics/3d/default_gravity", 9.8))
+
+## Below this Y the player is considered lost (off the beach, out to sea).
+const FALL_LIMIT := -8.5
 var _third_person := false
 var _held_item: Dictionary = {}
 var _item_visual: MeshInstance3D
@@ -315,8 +318,10 @@ func _physics_process(delta: float) -> void:
 	else:
 		_step_timer = minf(_step_timer, 0.12)
 
-	# Safety net: fell off the beach or waded out past the sea floor.
-	if global_position.y < -3.5:
+	# Safety net: fell off the beach or waded out past the sea floor. The limit
+	# sits below the deepest diggable pit (SandTerrain.MAX_DEPTH), or standing at
+	# the bottom of a deep hole would teleport the digger home.
+	if global_position.y < FALL_LIMIT:
 		respawn()
 
 	_net_stream_timer -= delta

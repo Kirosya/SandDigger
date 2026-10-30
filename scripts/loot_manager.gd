@@ -31,8 +31,21 @@ const SIGNAL_EXPONENT := 2.0
 ## Random scatter settings. Most junk is hidden under the sand; only a thin
 ## layer of litter is left lying on top of it.
 const LOOT_COUNT := 200
-const SURFACE_CHANCE := 0.06
-const RING_CHANCE := 0.12
+## Share of the scatter that is lying in plain sight. The rest is under the
+## sand, and the dig depths below are what make the beach slow again.
+const SURFACE_CHANCE := 0.08
+## One in eleven buried finds is a gold ring, one in thirty-three is an antique.
+const RING_CHANCE := 0.09
+const ANTIQUE_CHANCE := 0.03
+## Dig bands, in metres below the natural surface. Junk is a shallow scoop, a
+## ring needs a real hole, and the antique is only reachable once the pit is
+## deep - which, with sand that caves in, is the whole point of the dig loop.
+const TRASH_DEPTH_MIN := 0.30
+const TRASH_DEPTH_MAX := 1.20
+const RING_DEPTH_MIN := 1.20
+const RING_DEPTH_MAX := 2.60
+const ANTIQUE_DEPTH_MIN := 3.50
+const ANTIQUE_DEPTH_MAX := 5.00
 const SPAWN_RADIUS := 22.0
 ## Extra items scattered right around the spawn so the beach never looks empty.
 const STARTER_COUNT := 10
@@ -43,6 +56,10 @@ const MIN_SPACING := 1.2
 ## claimable. Zero means "half of it is sticking out", so the [E] prompt never
 ## appears for something you cannot see yet.
 const REVEAL_MARGIN := 0.0
+## When the collapsing walls raise the sand this much back over a revealed item,
+## it is buried again and its [E] label goes away: a hole that fills in really
+## does swallow what you had just uncovered.
+const REBURY_MARGIN := 0.10
 const SPAWN_CLEAR := Vector2(0.0, 6.0)
 const JUNKYARD_CLEAR := Vector2(2.6, 0.5)
 
@@ -59,6 +76,15 @@ const TRASH_NAMES := [
 ## Junk that a metal detector also reacts to. It is not the thing you are
 ## looking for, so it shows up as noise rather than as a clean reading.
 const METAL_NAMES := ["Rusty Can", "Scrap Metal", "Tin Lid"]
+
+## The deep finds. They are worth a fortune compared to the junk, and only the
+## later shovels can dig a hole that survives to their depth band.
+const ANTIQUE_NAMES := [
+	"Antique Amphora",
+	"Carved Idol",
+	"Bronze Lantern",
+	"Ancient Coin Hoard",
+]
 
 ## --- Tide trash ---------------------------------------------------------
 ## While the tide is coming in, junk floats in from the sea, drifts toward the
@@ -88,11 +114,11 @@ const DRY_LIMIT_X := 20.5
 const INLAND_LIMIT_Z := 22.5
 
 ## --- Treasure hunt -------------------------------------------------------
-## The chest a map leads to sits far deeper than the trash (the Earth Shovel
-## reaches 2.0 m), and the map under-sells where exactly: the light marks a wide
-## area, so the detector still has a job to do inside it.
-const TREASURE_DEPTH := 1.85
-const TREASURE_BEACON_RADIUS := 3.6
+## The chest a map leads to sits near the bottom of the sand, far deeper than
+## anything else. The map gives no marker, no light and no distance: the chest
+## is simply buried somewhere on the beach, and finding it is the detector's
+## job plus a genuinely wide, deep excavation.
+const TREASURE_DEPTH := 4.6
 ## Where a map may put a chest: dry open sand, away from the spawn and the stalls.
 const TREASURE_MIN_X := -16.0
 const TREASURE_MAX_X := 16.0
@@ -148,7 +174,6 @@ var _sea: Sea
 var _sea_spawn_timer := 2.0
 var _float_sync_timer := 0.0
 ## The light shaft over an unopened treasure, if any.
-var _beacon: Node3D
 
 
 func _ready() -> void:
@@ -253,8 +278,6 @@ func _apply_claim(item: LootItem, player_id: int) -> void:
 	if item.node != null:
 		item.node.queue_free()
 		item.node = null
-	if item.is_treasure:
-		_drop_beacon()
 	if not Net.is_online() or player_id == Net.local_id:
 		var state := Net.local_state()
 		if state != null:
@@ -309,9 +332,6 @@ func apply_snapshot(data: Dictionary) -> void:
 	var treasure: Dictionary = data.get("treasure", {})
 	if not treasure.is_empty() and find_loot(int(treasure.get("id", 0))) == null:
 		_add_treasure_item(treasure)
-	if not has_treasure():
-		_drop_beacon()
-
 
 ## Rebuilds the visible loot after a saved beach has been restored.
 ##
@@ -460,13 +480,16 @@ func nearest_distance(from: Vector3) -> float:
 
 ## 0..1 detector reading for the closest hidden item, wobbled by metal clutter
 ## nearby. With no metal around it is a clean, deterministic reading.
-func signal_strength(from: Vector3) -> float:
+## `range` comes from the detector tier, so an upgraded detector hears further.
+func signal_strength(from: Vector3, range: float = SIGNAL_RANGE) -> float:
+	if range <= 0.0:
+		return 0.0
 	var target := 0.0
 	var distance := nearest_distance(from)
-	if not is_inf(distance) and distance <= SIGNAL_RANGE:
-		target = pow(1.0 - distance / SIGNAL_RANGE, SIGNAL_EXPONENT)
+	if not is_inf(distance) and distance <= range:
+		target = pow(1.0 - distance / range, SIGNAL_EXPONENT)
 
-	var noise := metal_noise(from)
+	var noise := metal_noise(from, range)
 	if noise <= 0.0:
 		return target
 	var jitter := _noise_rng.randf_range(-1.0, 1.0) * noise * NOISE_STRENGTH
@@ -475,15 +498,15 @@ func signal_strength(from: Vector3) -> float:
 
 ## 0..1 amount of metal clutter within detector range. Surface and buried junk
 ## both count: a real detector does not care whether you can see the can.
-func metal_noise(from: Vector3) -> float:
+func metal_noise(from: Vector3, range: float = SIGNAL_RANGE) -> float:
 	var weight := 0.0
 	for item in loot:
 		if item.claimed or not item.metal:
 			continue
 		var distance := from.distance_to(item.buried_position)
-		if distance >= SIGNAL_RANGE:
+		if distance >= range:
 			continue
-		weight += pow(1.0 - distance / SIGNAL_RANGE, SIGNAL_EXPONENT)
+		weight += pow(1.0 - distance / range, SIGNAL_EXPONENT)
 	return clampf(weight / NOISE_SOFT_CAP, 0.0, 1.0)
 
 
@@ -547,20 +570,28 @@ func _build_item(point: Vector2) -> LootItem:
 	item.on_surface = _rng.randf() < SURFACE_CHANCE
 	item.buried_position = Vector3(point.x, 0.0, point.y)
 
-	# Gold rings only hide under the sand; surface junk is always scrap.
+	# What is under the sand depends on how deep it is: junk in the top metre,
+	# rings in the next, antiques near the bottom. Surface litter is always scrap.
 	var roll := _rng.randf()
-	if not item.on_surface and roll < RING_CHANCE:
+	if not item.on_surface and roll < ANTIQUE_CHANCE:
+		item.kind = "antique"
+		item.display_name = ANTIQUE_NAMES[_rng.randi() % ANTIQUE_NAMES.size()]
+		item.metal = true
+		item.value = _rng.randf_range(400.0, 700.0)
+		item.depth = _rng.randf_range(ANTIQUE_DEPTH_MIN, ANTIQUE_DEPTH_MAX)
+	elif not item.on_surface and roll < ANTIQUE_CHANCE + RING_CHANCE:
 		item.kind = "ring"
 		item.display_name = "Gold Ring"
-		item.value = _rng.randf_range(80.0, 140.0)
-		item.depth = _rng.randf_range(0.45, 0.75)
+		item.value = _rng.randf_range(150.0, 320.0)
+		item.depth = _rng.randf_range(RING_DEPTH_MIN, RING_DEPTH_MAX)
 	else:
 		item.kind = "trash"
 		var trash_names := TRASH_NAMES
 		item.display_name = trash_names[_rng.randi() % trash_names.size()]
 		item.metal = item.display_name in METAL_NAMES
 		item.value = _rng.randf_range(18.0, 40.0)
-		item.depth = 0.0 if item.on_surface else _rng.randf_range(0.12, 0.65)
+		item.depth = 0.0 if item.on_surface else _rng.randf_range(
+			TRASH_DEPTH_MIN, TRASH_DEPTH_MAX)
 
 	item.node = _make_visual(item)
 	if item.on_surface:
@@ -638,7 +669,6 @@ func spawn_treasure(payout: float) -> LootItem:
 	item.buried_position = Vector3(spot.x, 0.0, spot.y)
 	item.node = _make_visual(item)
 	loot.append(item)
-	_spawn_beacon(item.buried_position)
 	if Net.is_online():
 		rpc("_client_add_treasure", _pack_treasure(item))
 	world_changed.emit()
@@ -687,76 +717,8 @@ func _add_treasure_item(entry: Dictionary) -> void:
 	item.buried_position = entry.get("pos", Vector3.ZERO)
 	item.node = _make_visual(item)
 	loot.append(item)
-	_spawn_beacon(item.buried_position)
 
 
-## The marker over a treasure area. A wide flat ring draws the area on the sand and
-## a slim light beam marks its centre; the map says "dig around here", so the ring
-## (not a solid funnel) is what the player actually needs to see.
-func _spawn_beacon(at: Vector3) -> void:
-	_drop_beacon()
-	if _root == null:
-		return
-	var beacon := Node3D.new()
-	beacon.name = "TreasureBeacon"
-	beacon.position = Vector3(at.x, 0.0, at.z)
-
-	var beam := MeshInstance3D.new()
-	beam.name = "Beam"
-	var beam_mesh := CylinderMesh.new()
-	beam_mesh.top_radius = 0.35
-	beam_mesh.bottom_radius = 0.6
-	beam_mesh.height = 24.0
-	beam_mesh.radial_segments = 16
-	beam_mesh.rings = 1
-	beam_mesh.cap_top = false
-	beam_mesh.cap_bottom = false
-	beam.mesh = beam_mesh
-	beam.position.y = 11.4
-	beam.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	beam.material_override = _beacon_material(0.09)
-	beacon.add_child(beam)
-
-	var ring := MeshInstance3D.new()
-	ring.name = "Ring"
-	var ring_mesh := TorusMesh.new()
-	ring_mesh.inner_radius = TREASURE_BEACON_RADIUS - 0.12
-	ring_mesh.outer_radius = TREASURE_BEACON_RADIUS
-	ring_mesh.rings = 48
-	ring_mesh.ring_segments = 6
-	ring.mesh = ring_mesh
-	ring.position.y = 0.06
-	ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	ring.material_override = _beacon_material(0.40)
-	beacon.add_child(ring)
-
-	_root.add_child(beacon)
-	_beacon = beacon
-
-
-## Additive, unshaded gold used by both beacon pieces.
-func _beacon_material(alpha: float) -> StandardMaterial3D:
-	var material := StandardMaterial3D.new()
-	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	material.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
-	material.cull_mode = BaseMaterial3D.CULL_DISABLED
-	material.albedo_color = Color(1.0, 0.83, 0.35, alpha)
-	return material
-
-
-func _drop_beacon() -> void:
-	if _beacon != null and is_instance_valid(_beacon):
-		_beacon.queue_free()
-	_beacon = null
-
-
-## Distance from `from` to the treasure area's centre, or INF when no map is out.
-func treasure_distance(from: Vector3) -> float:
-	var item := active_treasure()
-	if item == null:
-		return INF
-	return Vector2(from.x - item.buried_position.x, from.z - item.buried_position.z).length()
 
 
 func _drift_floating(delta: float) -> void:
@@ -893,7 +855,40 @@ func _make_piece(item: LootItem) -> MeshInstance3D:
 		mesh_instance.add_child(lock_piece)
 		return mesh_instance
 
-	if item.kind == "ring":
+	if item.kind == "antique":
+		# A little amphora: a fat belly, a narrow neck and two stubby handles.
+		# Aged bronze reads instantly as "old and valuable" next to the junk.
+		var belly := CylinderMesh.new()
+		belly.top_radius = 0.055
+		belly.bottom_radius = 0.1
+		belly.height = 0.24
+		mesh_instance.mesh = belly
+		mesh_instance.rotation_degrees = Vector3(0.0, tilt, 0.0)
+		var neck := CylinderMesh.new()
+		neck.top_radius = 0.042
+		neck.bottom_radius = 0.05
+		neck.height = 0.09
+		var neck_piece := MeshInstance3D.new()
+		neck_piece.name = "Neck"
+		neck_piece.mesh = neck
+		neck_piece.position = Vector3(0.0, 0.16, 0.0)
+		neck_piece.material_override = _get_material("antique_trim")
+		mesh_instance.add_child(neck_piece)
+		for side in [-1.0, 1.0]:
+			var handle := TorusMesh.new()
+			handle.inner_radius = 0.035
+			handle.outer_radius = 0.055
+			handle.rings = 12
+			handle.ring_segments = 6
+			var handle_piece := MeshInstance3D.new()
+			handle_piece.name = "Handle"
+			handle_piece.mesh = handle
+			handle_piece.position = Vector3(side * 0.075, 0.1, 0.0)
+			handle_piece.rotation_degrees = Vector3(0.0, 0.0, 90.0)
+			handle_piece.material_override = _get_material("antique_trim")
+			mesh_instance.add_child(handle_piece)
+		material_kind = "antique"
+	elif item.kind == "ring":
 		var torus := TorusMesh.new()
 		torus.inner_radius = 0.075
 		torus.outer_radius = 0.13
@@ -995,6 +990,14 @@ func _get_material(kind: String) -> StandardMaterial3D:
 			material.albedo_color = Color(0.98, 0.78, 0.22)
 			material.metallic = 0.9
 			material.roughness = 0.22
+		"antique":
+			material.albedo_color = Color(0.42, 0.55, 0.46)
+			material.metallic = 0.55
+			material.roughness = 0.45
+		"antique_trim":
+			material.albedo_color = Color(0.62, 0.72, 0.52)
+			material.metallic = 0.7
+			material.roughness = 0.35
 		"bottle":
 			material.albedo_color = Color(0.42, 0.72, 0.62)
 			material.metallic = 0.0
@@ -1064,8 +1067,12 @@ func _on_sand_dug(world_position: Vector3, radius: float, _depth: float) -> void
 		# is simply removed from on top of them.
 		var height := _terrain.get_height_at(item.buried_position)
 		_set_buried_height(item, height)
-		if not item.revealed and height <= -item.depth + REVEAL_MARGIN:
-			_reveal(item, height)
+		if not item.revealed:
+			if height <= -item.depth + REVEAL_MARGIN:
+				_reveal(item, height)
+		elif height > -item.depth + REBURY_MARGIN:
+			# The walls fell back in and covered it again.
+			_rebury(item)
 
 
 ## Keeps a buried item at its depth while the sand is still above it, and lets
@@ -1074,6 +1081,17 @@ func _set_buried_height(item: LootItem, surface_height: float) -> void:
 	if item.node == null:
 		return
 	item.node.position.y = minf(-item.depth, surface_height + 0.02)
+
+
+## Sand slid back over a revealed item: hide its prompt and let the next dig
+## uncover it again.
+func _rebury(item: LootItem) -> void:
+	item.revealed = false
+	if item.node == null:
+		return
+	for child in item.node.get_children():
+		if child is Label3D:
+			child.queue_free()
 
 
 func _reveal(item: LootItem, surface_height: float, announce := true) -> void:

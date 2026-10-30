@@ -20,15 +20,19 @@ func _ready() -> void:
 
 	var ring: LootManager.LootItem = null
 	var trash: LootManager.LootItem = null
+	var antique: LootManager.LootItem = null
 	for item in loot.loot:
 		if item.revealed or item.claimed:
 			continue
 		if item.kind == "ring" and ring == null:
 			ring = item
+		elif item.kind == "antique" and antique == null:
+			antique = item
 		elif item.kind == "trash" and trash == null:
 			trash = item
 	_check("a buried ring exists", ring != null)
 	_check("a buried trash item exists", trash != null)
+	_check("a buried antique exists", antique != null)
 	if ring == null or trash == null:
 		_finish()
 		return
@@ -46,6 +50,15 @@ func _ready() -> void:
 	await get_tree().process_frame
 	_check("trash leaves the banner empty", hud._banner.text == "")
 	_check("trash uses the flash line", "Uncovered" in hud._flash.text)
+
+	if antique != null:
+		hud._banner.text = ""
+		loot._reveal(antique, -0.25)
+		await get_tree().process_frame
+		_check("the antique gets its own banner", "ANTIQUE" in hud._banner.text)
+		_check("the antique banner shows its name",
+			antique.display_name.to_upper() in hud._banner.text)
+		_check("the antique banner shows the value", "$" in hud._banner.text)
 
 	_finish()
 

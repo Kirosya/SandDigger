@@ -43,7 +43,7 @@ func _check_round_trip() -> void:
 	state.current_xp = 640.0
 	state.current_money = 275.0
 	state.equipment_tier_index = 2
-	state.has_detector = true
+	state.detector_tier = 3
 	Profile.save_state(state)
 	_check("file was written", FileAccess.file_exists(Profile.profile_path()))
 
@@ -53,7 +53,10 @@ func _check_round_trip() -> void:
 	_check("xp restored", is_equal_approx(loaded.current_xp, 640.0))
 	_check("money restored", is_equal_approx(loaded.current_money, 275.0))
 	_check("tier restored", loaded.equipment_tier_index == 2)
-	_check("detector restored", loaded.has_detector)
+	_check("detector tier restored", loaded.detector_tier == 3 and loaded.has_detector)
+	_check("detector stats follow the tier",
+		is_equal_approx(loaded.detector_range(), 11.0)
+		and is_equal_approx(loaded.detector_cooldown(), 8.0))
 	# 640 XP is level 4 on the 50 * n * (n-1) curve (level 4 starts at 600).
 	_check("level derived from xp", loaded.current_level == 4)
 	state.queue_free()
@@ -126,6 +129,24 @@ func _check_derived_values() -> void:
 	_check("wild tier is clamped to the last one",
 		state.equipment_tier_index == state.tiers.size() - 1)
 	state.queue_free()
+
+	# Legacy saves only knew whether the detector was owned: that is tier 1.
+	config.set_value(Profile.PROFILE_KEY, "has_detector", true)
+	config.save(Profile.profile_path())
+	var legacy := _make_state()
+	Profile.load_into(legacy)
+	_check("legacy has_detector migrates to tier 1",
+		legacy.detector_tier == 1 and legacy.has_detector)
+	legacy.queue_free()
+
+	# An edited detector tier is clamped to the top tier, not trusted.
+	config.set_value(Profile.PROFILE_KEY, "detector_tier", 99)
+	config.save(Profile.profile_path())
+	var wild := _make_state()
+	Profile.load_into(wild)
+	_check("wild detector tier is clamped",
+		wild.detector_tier == PlayerState.DETECTOR_TIERS.size() - 1)
+	wild.queue_free()
 
 	# And the other way round: enough XP for level 6 but an old tier on disk.
 	config.set_value(Profile.PROFILE_KEY, "xp", PlayerState.xp_required_for_level(6))

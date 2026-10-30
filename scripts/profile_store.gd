@@ -55,7 +55,10 @@ func load_into(state: PlayerState) -> bool:
 	var section := PROFILE_KEY
 	state.current_xp = maxf(0.0, float(config.get_value(section, "xp", 0.0)))
 	state.current_money = maxf(0.0, float(config.get_value(section, "money", 0.0)))
-	state.has_detector = bool(config.get_value(section, "has_detector", false))
+	# Older saves only knew whether the detector was owned; that is tier 1.
+	var legacy_detector := 1 if bool(config.get_value(section, "has_detector", false)) else 0
+	var detector := int(config.get_value(section, "detector_tier", legacy_detector))
+	state.detector_tier = clampi(detector, 0, PlayerState.DETECTOR_TIERS.size() - 1)
 	state.treasure_finds = maxi(0, int(config.get_value(section, "treasure_finds", 0)))
 
 	# Level and tier are derived, never trusted: a stale or edited file cannot
@@ -70,7 +73,7 @@ func load_into(state: PlayerState) -> bool:
 	# Let the HUD redraw from the restored numbers.
 	state.xp_changed.emit(state.current_xp, state.current_level)
 	state.money_changed.emit(state.current_money)
-	state.detector_changed.emit(state.has_detector)
+	state.detector_changed.emit(state.detector_tier)
 	state.equipment_changed.emit(state.get_current_equipment())
 	state.inventory_changed.emit(state.bag_slots, state.held_slot)
 	state.carried_changed.emit(state.carried_count(), state.carried_value())
@@ -87,7 +90,7 @@ func save_state(state: PlayerState) -> void:
 	config.set_value(section, "xp", state.current_xp)
 	config.set_value(section, "money", state.current_money)
 	config.set_value(section, "tier", state.equipment_tier_index)
-	config.set_value(section, "has_detector", state.has_detector)
+	config.set_value(section, "detector_tier", state.detector_tier)
 	config.set_value(section, "treasure_finds", state.treasure_finds)
 	config.set_value(section, "slots", state.bag_slots.size())
 	for i in state.bag_slots.size():
