@@ -53,20 +53,37 @@ func _ready() -> void:
 		var inland_edge := water.position.z + plane.size.y * 0.5
 		print("SEA water z=%.1f size_z=%.1f inland_edge=%.2f" % [
 			water.position.z, plane.size.y, inland_edge])
-		_check("water never reaches the inland half of the beach", inland_edge <= 0.5)
+		_check("water covers the whole beach so a hole can fill", inland_edge >= 30.0)
 		_check("water still reaches the horizon", plane.size.y >= 300.0)
 
-		# The plane spans the horizon, so it also lies under the inland sand. It
-		# must be masked off behind the waterline, otherwise a hole dug in the
-		# beach exposes it as a flat white/turquoise slab just under the surface.
+		# The plane now lies under the whole beach, so the shader has to decide
+		# where the sea actually is: the sand heightmap says how high the ground
+		# is, and the flood fill says which holes the tide can reach.
 		var material := water.material_override as ShaderMaterial
 		_check("water is a shader", material != null)
 		if material != null:
-			var dry := float(material.get_shader_parameter("dry_margin"))
-			print("SEA dry_margin=%.2f" % dry)
-			_check("water is masked off inland", is_equal_approx(dry, Sea.DRY_MARGIN))
-			_check("the mask starts at the waterline, not metres out to sea",
-				dry > 0.0 and dry < 2.0)
+			_check("the water knows where the sand is",
+				material.get_shader_parameter("terrain_height") != null)
+			_check("the water knows which holes it can reach",
+				material.get_shader_parameter("flood_mask") != null)
+			_check("the water knows the tide height",
+				is_equal_approx(float(material.get_shader_parameter("water_level")),
+					sea.level))
+
+	# The shader samples the live heightmap as a float texture.
+	var height_tex := terrain.height_texture
+	_check("the terrain exposes its heightmap to shaders", height_tex != null)
+	if height_tex != null:
+		_check("the heightmap texture covers the sand grid",
+			height_tex.get_width() == SandTerrain.GRID_SIZE
+			and height_tex.get_height() == SandTerrain.GRID_SIZE)
+		var image := height_tex.get_image()
+		if image != null and image.get_width() == SandTerrain.GRID_SIZE:
+			var index := 40 * SandTerrain.GRID_SIZE + 64
+			print("SEA heightmap texel=%.3f sand=%.3f" % [
+				image.get_pixel(64, 40).r, terrain.heights[index]])
+			_check("the shader heightmap matches the sand",
+				absf(image.get_pixel(64, 40).r - terrain.heights[index]) < 0.001)
 
 	# The sea floor must only exist past the edge of the sand. It used to run all
 	# the way to z = 0, three metres under the flat beach, so any pit dug at the
@@ -122,6 +139,66 @@ func _ready() -> void:
 	_check("the undug profile is untouched",
 		absf(terrain.base_height_at(Vector3(0.0, 0.0, -10.0))
 			- sea.level) < 0.35)
+
+	# --- The sea fills the holes it can reach ------------------------------
+	# A pit dug at the shore is joined to the open sea (its rim reaches past the
+	# waterline), so the tide has to flood it all the way up to sea level. A pit
+	# dug in the middle of the beach is a closed bowl: its floor is well below sea
+	# level, but nothing connects it to the water, so it has to stay bone dry.
+	sea._time = 0.0
+	sea._update_tide(0.0)
+	# Kept off to the side: sea trash drifts in over x = -14..14 and the ebb test
+	# parks a piece right on the waterline, where this pit would be.
+	var shore_pit := Vector3(22.0, 0.0, -16.0)
+	for i in 40:
+		terrain.dig_at(shore_pit, 3.0, 2.0)
+	sea._update_tide(0.0)
+	print("SEA shore pit floor=%.2f depth=%.2f flooded=%s (waterline %.2f)" % [
+		terrain.get_height_at(shore_pit), sea.water_depth_at(shore_pit),
+		str(sea.is_flooded_at(shore_pit)), sea.shoreline_z])
+	_check("the tide floods a pit joined to the sea",
+		sea.water_depth_at(shore_pit) > 0.5 and sea.is_flooded_at(shore_pit))
+
+	var inland_pit := Vector3(4.0, 0.0, 6.0)
+	for i in 40:
+		terrain.dig_at(inland_pit, 3.0, 2.0)
+	sea._update_tide(0.0)
+	print("SEA inland pit floor=%.2f depth=%.2f flooded=%s" % [
+		terrain.get_height_at(inland_pit), sea.water_depth_at(inland_pit),
+		str(sea.is_flooded_at(inland_pit))])
+	_check("a pit the sea cannot reach stays dry",
+		sea.water_depth_at(inland_pit) > 3.0
+		and not sea.is_flooded_at(inland_pit))
+
+	# --- The water looks like water from the inside ------------------------
+	# A deep hole at the shore fills up at high tide. A camera down at the bottom
+	# of it is under the surface, so the sea has to fade in its blue-green veil
+	# and fog instead of leaving dry sand under a blue lid.
+	sea._time = Sea.TIDE_PERIOD * 0.5
+	sea._update_tide(0.0)
+	var deep_pit := Vector3(22.0, 0.0, -9.5)
+	for i in 60:
+		terrain.dig_at(deep_pit, 4.0, 2.0)
+	sea._update_tide(0.0)
+	var pit_floor := terrain.get_height_at(deep_pit)
+	var player := get_tree().get_first_node_in_group("player") as FirstPersonPlayer
+	_check("the test can look through the player camera", player != null)
+	if player != null:
+		player.global_position = Vector3(deep_pit.x, pit_floor, deep_pit.z)
+		sea._update_veil(1.0)
+		var wet_alpha := sea._veil_alpha
+		var eye := player.head.global_position
+		print("SEA deep pit floor=%.2f eye=%.2f depth=%.2f flooded=%s veil=%.2f" % [
+			pit_floor, eye.y, sea.water_depth_at(eye),
+			str(sea.is_flooded_at(eye)), wet_alpha])
+		_check("a deep shore pit fills up to the tide",
+			sea.is_flooded_at(eye) and sea.water_depth_at(eye) > 3.0)
+		_check("the water looks like water from the inside", wet_alpha > 0.2)
+		# Back on the dry beach the veil has to fade away again.
+		player.global_position = Vector3(0.0, 0.0, 6.0)
+		sea._update_veil(1.0)
+		print("SEA back on the beach veil=%.2f" % sea._veil_alpha)
+		_check("the veil clears on dry land", sea._veil_alpha < 0.05)
 
 	# --- The rising tide floats trash in on its own ------------------------
 	sea._time = Sea.TIDE_PERIOD * 0.25

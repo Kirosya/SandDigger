@@ -100,6 +100,13 @@ var base_heights := PackedFloat32Array()
 var wet_line_z := SHORE_START_Z
 ## Last region passed to rebuild_mesh (debug/tests).
 var last_dirty_rect := Rect2i()
+## Bumped every time the sand geometry changes, so the sea knows when to redo
+## its flood fill (which holes the tide can actually reach).
+var revision := 0
+## The heightmap as a shader-visible float texture. The sea samples it to find
+## out where the sand is, so it can flood a dug hole instead of cutting itself
+## off at a fixed Z line.
+var height_texture: ImageTexture
 
 var _chunks: Array[Chunk] = []
 var _chunks_root: Node3D
@@ -117,6 +124,7 @@ func _ready() -> void:
 	_setup_collision()
 	_create_chunks()
 	rebuild_mesh(Rect2i(0, 0, GRID_SIZE, GRID_SIZE))
+	_refresh_height_texture()
 
 
 ## Carves the static beach profile into the heightmap before the first mesh
@@ -219,6 +227,7 @@ func dig_at(world_pos: Vector3, radius: float, depth: float) -> float:
 	var dug_volume := _volume_lost(before, area)
 	rebuild_mesh(area)
 	_sync_collision()
+	_refresh_height_texture()
 	dug.emit(world_pos, radius, depth)
 	return dug_volume
 
@@ -335,6 +344,20 @@ func set_heights(data: PackedFloat32Array) -> void:
 	heights = data.duplicate()
 	rebuild_mesh(Rect2i(0, 0, GRID_SIZE, GRID_SIZE))
 	_sync_collision()
+	_refresh_height_texture()
+
+
+## Keeps the shader copy of the heightmap in step with the sand. `heights` is
+## already row-major (index = z * GRID_SIZE + x) and FORMAT_RF is one float per
+## pixel, so the packed floats go straight in - 64 KB per change.
+func _refresh_height_texture() -> void:
+	var image := Image.create_from_data(GRID_SIZE, GRID_SIZE, false,
+		Image.FORMAT_RF, heights.to_byte_array())
+	if height_texture == null:
+		height_texture = ImageTexture.create_from_image(image)
+	else:
+		height_texture.update(image)
+	revision += 1
 
 
 ## Entry point for a player's shovel. The host carves the sand and broadcasts;

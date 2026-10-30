@@ -276,9 +276,33 @@ edge - the "dark blue area inside the beach". It is now only what it was meant t
 be: the floor under the open water that keeps the transparent surface from fading
 into the sky at the horizon.
 
-The water plane is masked off behind the moving waterline (`Sea.DRY_MARGIN`), and
-that cut is faded with a `smoothstep` instead of `discard`, so a pit dug at the
-waterline shows a soft wet edge rather than a razor-straight wall of water.
+The water plane is no longer masked off with a straight Z cut. It now spans the
+whole beach (`Sea.WATER_INLAND_Z = 32`, `Sea.WATER_SPAN_Z = 460`) and the shader
+decides, per pixel, whether the sea is there:
+
+* `SandTerrain.height_texture` is a live `FORMAT_RF` copy of the 128x128 heightmap
+  (`SandTerrain.revision` bumps on every dig). The sea binds it plus the world
+  rectangle it covers, so the shader knows how high the sand is under every bit of
+  water.
+* `Sea._refresh_flood()` runs a flood fill over that heightmap from the open sea:
+  a cell is wet when it is below the tide **and** joined to the open sea through
+  other wet cells. The result goes to the shader as `flood_mask` (R8).
+* A fragment is discarded when the sand there is above the tide, or when it is
+  below the tide but not reachable. So a pit dug at the shore fills up to sea
+  level, a hole dug in the middle of the beach stays bone dry, and a pit that
+  only breaches the waterline at high tide fills and drains with the tide.
+* Foam and the deep colour follow the **water depth** (`foam_depth` 0.30 m,
+  `deep_depth` 2.0 m) instead of the distance from the waterline, so they look
+  right on the open shore and on the rim of a flooded pit alike.
+
+The surface is double sided (`cull_disabled`) and the fragment shader flips
+`NORMAL` on the back face, so looking up from inside the water shows a bright,
+nearly opaque lid instead of the sky through a paper-thin sheet. While the camera
+is under the water (`Sea.is_flooded_at` on the camera, i.e. below the tide *and*
+inside a flooded cell) the sea fades in a blue-green screen veil
+(`Sea.UNDERWATER_COLOR`, layer 5, under the HUD) and swaps the scene fog for the
+water murk (`UNDERWATER_FOG_DENSITY` 0.11). Standing at the bottom of a flooded
+pit therefore looks like water, not like dry sand under a blue lid.
 
 ## The endgame: treasure maps
 
@@ -315,6 +339,7 @@ and the HUD turns it into a banner with the payout and the running chest count.
 An unopened chest survives a restart with its position and payout, because it is in
 the `treasure` key of the loot snapshot and the saved heightmap decides whether it
 is already uncovered. Once opened it is a claimed id, so it never comes back.
+
 ## Tests
 
 ```
@@ -323,8 +348,8 @@ godot --headless --path . res://tests/sfx_test.tscn       # streams, tier->sound
 godot --headless --path . res://tests/profile_test.tscn   # round trip, damaged files, derived values, bag
 godot --headless --path . res://tests/beach_test.tscn     # save/restore a real dug beach, damaged files
 godot --headless --path . res://tests/treasure_test.tscn  # map offer, deep chest, payout, saved chest
-godot --headless --path . res://tests/sea_test.tscn       # beach profile, tide, seabed clip, surf junk, ebb sink
-godot --path . res://tests/sea_shot.tscn                  # visual: the sea to the horizon (proof_sea.png)
+godot --headless --path . res://tests/sea_test.tscn       # beach profile, tide, seabed clip, surf junk, ebb sink, pit flooding
+godot --path . res://tests/sea_shot.tscn                  # visual: the sea, plus a flooded pit from the rim and from under water
 ```
 
 Sound output cannot be heard headless, so the assertions check which stream was handed
