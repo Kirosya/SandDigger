@@ -108,6 +108,16 @@ const SEA_MAX_TOTAL := 18
 ## almost half a minute. Clearing the beach speeds the sea straight back up.
 const SEA_LITTER_PENALTY := 0.8
 const SEA_DRIFT_SPEED := 0.7
+## When the tide turns, junk still in the surf stops travelling and settles into
+## the wet sand where the wave left it. It sinks at this speed (m/s) instead of
+## being dragged back out to sea.
+const SEA_SINK_SPEED := 0.45
+## How far below the resting height settled junk ends up: with the origin half a
+## body down it reads as "the sand swallowed it" while staying visible and
+## pickable.
+const SEA_SETTLE_DEPTH := 0.10
+## Surface loot rests with its origin this far above the sand.
+const SURFACE_LIFT := 0.1
 ## Floating junk is owned by the host; it streams its position to clients at
 ## this rate (only a handful of items are ever in the surf at once).
 const FLOAT_SYNC_INTERVAL := 0.2
@@ -431,7 +441,7 @@ func _client_float(loot_id: int, pos: Vector3) -> void:
 
 
 @rpc("authority", "call_remote", "reliable")
-func _client_beach(loot_id: int, pos: Vector3) -> void:
+func _client_beach(loot_id: int, pos: Vector3, settle := 0.0) -> void:
 	var item := find_loot(loot_id)
 	if item == null:
 		return
@@ -440,6 +450,8 @@ func _client_beach(loot_id: int, pos: Vector3) -> void:
 	if item.node != null:
 		item.node.position = Vector3(pos.x, 0.0, pos.z)
 	_place_on_surface(item)
+	if item.node != null:
+		item.node.position.y -= settle
 
 
 func find_loot(loot_id: int) -> LootItem:
@@ -760,6 +772,23 @@ func _drift_floating(delta: float) -> void:
 		if item.claimed or not item.floating or item.node == null:
 			continue
 		var pos := item.node.position
+		# The surface the junk is riding: it bobs on the swell.
+		var water := _sea.level + 0.06 \
+			+ sin(Time.get_ticks_msec() * 0.002 + float(item.loot_id)) * 0.04
+		if not _sea.rising:
+			# Ebb tide. The wave lets go of the junk instead of carrying it back
+			# out: it stops travelling inland, rides the falling water down, and
+			# the wet sand swallows it where it lies.
+			var rest := _sand_at(pos) + SURFACE_LIFT - SEA_SETTLE_DEPTH
+			pos.y = move_toward(pos.y, maxf(rest, water), SEA_SINK_SPEED * delta)
+			item.node.position = pos
+			item.buried_position = Vector3(pos.x, 0.0, pos.z)
+			if pos.y <= rest + 0.0001:
+				_beach_sea_trash(item, SEA_SETTLE_DEPTH)
+				continue
+			if sync:
+				rpc("_client_float", item.loot_id, pos)
+			continue
 		var to_target := Vector2(item.drift_target.x - pos.x, item.drift_target.z - pos.z)
 		var distance := to_target.length()
 		if distance <= 0.2:
@@ -768,24 +797,40 @@ func _drift_floating(delta: float) -> void:
 		var step := minf(SEA_DRIFT_SPEED * delta, distance)
 		pos.x += to_target.x / distance * step
 		pos.z += to_target.y / distance * step
-		# Bob on the current tide level while it rides the surf in.
-		pos.y = _sea.level + 0.06 + sin(Time.get_ticks_msec() * 0.002 + float(item.loot_id)) * 0.04
+		# Bob on the current tide level while it rides the surf in, but never sink
+		# under the beach it is crossing: once the sand rises above the water the
+		# junk is dragged along the wet surface instead of vanishing into it.
+		pos.y = maxf(water, _sand_at(pos) + 0.08)
 		item.node.position = pos
 		item.buried_position = Vector3(pos.x, 0.0, pos.z)
 		if sync:
 			rpc("_client_float", item.loot_id, pos)
 
 
-## Turns a floating item into normal surface loot on the dry sand.
-func _beach_sea_trash(item: LootItem) -> void:
+## Sand height under a world position (0 when there is no terrain).
+func _sand_at(pos: Vector3) -> float:
+	if _terrain == null:
+		return 0.0
+	return _terrain.get_height_at(pos)
+
+
+## Turns a floating item into normal surface loot where it came to rest. `settle`
+## is how far below the surface it ends up: junk left behind by the ebb tide is
+## half swallowed by the wet sand rather than sitting on top of it.
+func _beach_sea_trash(item: LootItem, settle := 0.0) -> void:
 	item.floating = false
-	item.buried_position = Vector3(item.drift_target.x, 0.0, item.drift_target.z)
+	# Washed-ashore junk stays where the wave left it, not at the drift target it
+	# may never have reached.
+	var spot := item.buried_position
 	if item.node != null:
-		item.node.position = Vector3(item.buried_position.x, 0.0, item.buried_position.z)
+		spot = Vector3(item.node.position.x, 0.0, item.node.position.z)
+	item.buried_position = spot
 	_place_on_surface(item)
+	if item.node != null:
+		item.node.position.y -= settle
 	if Net.is_online():
-		rpc("_client_beach", item.loot_id, item.buried_position)
-	print("[sea] '%s' washed ashore at %s" % [item.display_name, str(item.buried_position)])
+		rpc("_client_beach", item.loot_id, spot, settle)
+	print("[sea] '%s' washed ashore at %s" % [item.display_name, str(spot)])
 
 
 func _floating_count() -> int:
@@ -811,7 +856,7 @@ func _place_on_surface(item: LootItem) -> void:
 	var height := 0.0
 	if _terrain != null:
 		height = _terrain.get_height_at(item.buried_position)
-	item.node.position.y = height + 0.1
+	item.node.position.y = height + SURFACE_LIFT
 	item.node.visible = true
 
 

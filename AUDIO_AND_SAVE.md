@@ -259,6 +259,27 @@ Clearing the beach is therefore rewarded twice: the junk is worth money, and the
 sea immediately goes back to washing in a piece every few seconds. Left alone,
 18 pieces is as dirty as the shore gets.
 
+When the tide turns, junk still in the surf is **not** carried back out with the
+wave: it stops travelling inland, rides the falling water down and is swallowed
+by the wet sand where the wave left it, ending half buried but still visible and
+pickable (`SEA_SINK_SPEED` 0.45 m/s, `SEA_SETTLE_DEPTH` 0.1 m). While the surf is
+coming in it never sinks under the beach it is crossing - once the sand rises
+above the water it is dragged along the wet surface instead.
+
+## Sea rendering
+
+The sea floor plane (`Sea.Seabed`) only exists past the edge of the sand mesh
+(`Sea.SEABED_EDGE_Z = -31`, the heightmap ends at -31.75). It used to run all the
+way to `z = 0`, three metres under the flat beach, so any pit dug at the shore
+deeper than -3.2 m exposed it as a flat grey-blue slab with a perfectly straight
+edge - the "dark blue area inside the beach". It is now only what it was meant to
+be: the floor under the open water that keeps the transparent surface from fading
+into the sky at the horizon.
+
+The water plane is masked off behind the moving waterline (`Sea.DRY_MARGIN`), and
+that cut is faded with a `smoothstep` instead of `discard`, so a pit dug at the
+waterline shows a soft wet edge rather than a razor-straight wall of water.
+
 ## The endgame: treasure maps
 
 The chest is now buried at `LootManager.TREASURE_DEPTH = 4.6 m`, near the bottom
@@ -302,6 +323,7 @@ godot --headless --path . res://tests/sfx_test.tscn       # streams, tier->sound
 godot --headless --path . res://tests/profile_test.tscn   # round trip, damaged files, derived values, bag
 godot --headless --path . res://tests/beach_test.tscn     # save/restore a real dug beach, damaged files
 godot --headless --path . res://tests/treasure_test.tscn  # map offer, deep chest, payout, saved chest
+godot --headless --path . res://tests/sea_test.tscn       # beach profile, tide, seabed clip, surf junk, ebb sink
 godot --path . res://tests/sea_shot.tscn                  # visual: the sea to the horizon (proof_sea.png)
 ```
 

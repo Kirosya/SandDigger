@@ -68,6 +68,21 @@ func _ready() -> void:
 			_check("the mask starts at the waterline, not metres out to sea",
 				dry > 0.0 and dry < 2.0)
 
+	# The sea floor must only exist past the edge of the sand. It used to run all
+	# the way to z = 0, three metres under the flat beach, so any pit dug at the
+	# shore deeper than that showed it as a dead grey-blue slab with a perfectly
+	# straight edge - the "dark blue area inside the beach".
+	var seabed := sea.get_node_or_null("Seabed") as MeshInstance3D
+	_check("the sea has a floor under the horizon", seabed != null)
+	if seabed != null:
+		var floor_plane := seabed.mesh as PlaneMesh
+		var near_edge := seabed.position.z + floor_plane.size.y * 0.5
+		var sand_edge := -SandTerrain.HALF_GRID * SandTerrain.CELL_SIZE
+		print("SEA seabed near_edge=%.2f (sand mesh ends at %.2f)" % [near_edge, sand_edge])
+		_check("the sea floor never reaches under the beach", near_edge <= sand_edge + 1.0)
+		_check("the sea floor still reaches the horizon",
+			seabed.position.z - floor_plane.size.y * 0.5 <= -400.0)
+
 	# --- Tide ---------------------------------------------------------------
 	print("SEA tide level=%.3f rising=%s shoreline=%.2f" % [
 		sea.level, str(sea.rising), sea.shoreline_z])
@@ -175,6 +190,41 @@ func _ready() -> void:
 		LootManager.SEA_MAX_TOTAL + 10, loot._sea_trash_count()])
 	_check("the sea stops delivering at the ceiling",
 		loot._sea_trash_count() == LootManager.SEA_MAX_TOTAL)
+
+	# --- Ebb tide: junk sinks into the sand, it is not carried back out -----
+	# When the wave pulls back, junk still in the surf must stop travelling and
+	# be swallowed by the wet sand where the wave left it.
+	sea._time = Sea.TIDE_PERIOD * 0.75
+	sea._update_tide(0.0)
+	_check("the tide is going out", not sea.rising)
+	var left := loot._spawn_sea_trash()
+	_check("ebb junk starts afloat", left != null and left.floating)
+	if left != null:
+		# Put it on the wet sand just inside the waterline, as if the surf had
+		# just pushed it up the beach.
+		var left_x := left.node.position.x
+		var left_z := sea.shoreline_z + 1.5
+		var left_sand := terrain.get_height_at(Vector3(left_x, 0.0, left_z))
+		left.node.position = Vector3(left_x, left_sand + 0.08, left_z)
+		left.buried_position = Vector3(left_x, 0.0, left_z)
+		var y_before := left.node.position.y
+		var z_before := left.node.position.z
+		for i in 120:
+			sea._update_tide(0.1)
+			loot._drift_floating(0.1)
+		var rest := left_sand + LootManager.SURFACE_LIFT - LootManager.SEA_SETTLE_DEPTH
+		print("SEA ebb junk z %.2f -> %.2f, y %.2f -> %.2f (rest %.2f, floating=%s)" % [
+			z_before, left.node.position.z, y_before, left.node.position.y,
+			rest, str(left.floating)])
+		_check("ebbing junk does not travel with the water",
+			absf(left.node.position.z - z_before) < 0.01
+			and absf(left.node.position.x - left_x) < 0.01)
+		_check("ebbing junk settles down into the sand",
+			left.node.position.y < y_before
+			and absf(left.node.position.y - rest) < 0.02)
+		_check("settled junk is still claimable",
+			not left.floating and left.revealed
+			and loot.nearest_claimable(left.world_position(), 0.01) == left)
 
 	_finish()
 

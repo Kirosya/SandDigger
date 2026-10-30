@@ -37,8 +37,11 @@ void vertex() {
 }
 
 void fragment() {
-	// Past the waterline there is beach, not sea.
-	if (world_pos.z > shoreline_z + dry_margin) {
+	// Past the waterline there is beach, not sea. The cut is softened over the
+	// dry margin so a pit dug at the waterline shows a wet edge rather than a
+	// razor-straight wall of water.
+	float dry = smoothstep(shoreline_z, shoreline_z + dry_margin, world_pos.z);
+	if (dry >= 1.0) {
 		discard;
 	}
 
@@ -55,7 +58,7 @@ void fragment() {
 	vec3 color = mix(shallow_color.rgb, deep_color.rgb, offshore);
 	color = mix(color, foam_color.rgb, foam);
 	ALBEDO = color + ripple * 0.03;
-	ALPHA = max(mix(shallow_alpha, deep_alpha, offshore), foam * 0.85);
+	ALPHA = max(mix(shallow_alpha, deep_alpha, offshore), foam * 0.85) * (1.0 - dry);
 	ROUGHNESS = mix(0.30, 0.55, foam);
 	METALLIC = 0.0;
 	SPECULAR = 0.12;

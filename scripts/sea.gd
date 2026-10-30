@@ -29,6 +29,10 @@ const WATER_SPAN_Z := 460.0
 ## plane still spans the whole horizon, but on the beach side it is masked off so
 ## a hole dug in the sand can never expose it as a flat sheet under the surface.
 const DRY_MARGIN := 0.35
+## World Z where the sand heightmap ends (128 cells of 0.5 m, centred on 0). The
+## sea floor plane starts just inside it: everything inland of this is covered by
+## sand, and a plane there would only ever be seen through a dug hole.
+const SEABED_EDGE_Z := -31.0
 
 ## Current water height (world Y).
 var level := TIDE_LOW
@@ -112,17 +116,21 @@ func _build() -> void:
 	water.position = Vector3(0.0, 0.0, -WATER_SPAN_Z * 0.5)
 	_water = water
 
-	# Seabed under the open water, past the edge of the 64 m heightmap. It keeps
-	# the transparent water from fading into the sky at the horizon. Kept a
-	# light wet-sand tone: a dark floor plus the water tint used to read as a
-	# murky maroon band out where the beach ends.
+	# Seabed under the open water, past the edge of the heightmap. It keeps the
+	# transparent water from fading into the sky at the horizon. It starts at the
+	# edge of the sand mesh, not under the beach: it used to reach z = 0, which
+	# put a flat slab three metres under the flat beach, and any pit dug at the
+	# shore deeper than that showed it as a dead grey-blue sheet. Kept a light
+	# wet-sand tone as well, so the horizon does not go murky.
 	var seabed := MeshInstance3D.new()
 	seabed.name = "Seabed"
 	var floor_mesh := PlaneMesh.new()
-	floor_mesh.size = Vector2(WATER_SIZE, WATER_SPAN_Z)
+	var seabed_span := WATER_SPAN_Z - absf(SEABED_EDGE_Z)
+	floor_mesh.size = Vector2(WATER_SIZE, seabed_span)
 	seabed.mesh = floor_mesh
 	seabed.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	seabed.position = Vector3(0.0, SandTerrain.SEA_FLOOR - 0.4, -WATER_SPAN_Z * 0.5)
+	seabed.position = Vector3(0.0, SandTerrain.SEA_FLOOR - 0.4,
+		SEABED_EDGE_Z - seabed_span * 0.5)
 	var floor_material := StandardMaterial3D.new()
 	floor_material.albedo_color = Color(0.34, 0.36, 0.30)
 	floor_material.roughness = 1.0
